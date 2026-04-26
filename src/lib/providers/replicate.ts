@@ -13,6 +13,7 @@ import {
   type DiffusionRequest,
   type DiffusionResult,
   AuthError,
+  PaymentRequiredError,
   RateLimitError,
 } from "./types";
 
@@ -114,6 +115,13 @@ export const replicateProvider: DiffusionProvider = {
     } catch (err: unknown) {
       const message = err instanceof Error ? err.message : String(err);
       if (/401|unauthor/i.test(message)) throw new AuthError("replicate");
+      if (/402|insufficient credit|payment required/i.test(message)) {
+        throw new PaymentRequiredError(
+          "replicate",
+          "Insufficient Replicate credit. Purchase credit and try again.",
+          "https://replicate.com/account/billing#billing",
+        );
+      }
       if (/429|rate.?limit/i.test(message)) {
         const m = message.match(/retry.?after[^\d]*(\d+)/i);
         const retryAfter = m ? parseInt(m[1], 10) : 30;

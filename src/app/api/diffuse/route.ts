@@ -15,6 +15,7 @@ import {
   type DiffusionRequest,
   type ProviderId,
   AuthError,
+  PaymentRequiredError,
   RateLimitError,
   CapabilityError,
 } from "@/lib/providers/types";
@@ -74,6 +75,12 @@ export async function POST(req: Request) {
       return NextResponse.json(
         { error: "auth", providerId, message: err.message },
         { status: 401 },
+      );
+    }
+    if (err instanceof PaymentRequiredError) {
+      return NextResponse.json(
+        { error: "payment_required", providerId, message: err.message, billingUrl: err.billingUrl },
+        { status: 402 },
       );
     }
     if (err instanceof RateLimitError) {

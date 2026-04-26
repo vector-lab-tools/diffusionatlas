@@ -74,3 +74,9 @@ export class AuthError extends Error {
     super(`Missing or invalid API key for ${providerId}`);
   }
 }
+
+export class PaymentRequiredError extends Error {
+  constructor(public providerId: string, public detail: string, public billingUrl?: string) {
+    super(detail);
+  }
+}

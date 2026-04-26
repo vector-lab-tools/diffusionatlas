@@ -14,6 +14,7 @@ interface GenError {
   error: string;
   message?: string;
   retryAfterSeconds?: number;
+  billingUrl?: string;
 }
 
 function dataUrlToBlob(dataUrl: string): Blob {
@@ -36,10 +37,12 @@ export function GuidanceSweep() {
   const [running, setRunning] = useState(false);
   const [result, setResult] = useState<DiffuseResponse | null>(null);
   const [error, setError] = useState<string | null>(null);
+  const [errorLink, setErrorLink] = useState<{ href: string; label: string } | null>(null);
 
   async function generate() {
     setRunning(true);
     setError(null);
+    setErrorLink(null);
     setResult(null);
 
     const request: DiffusionRequest = {
@@ -68,6 +71,9 @@ export function GuidanceSweep() {
         const err: GenError = await res.json().catch(() => ({ error: "unknown" }));
         if (err.error === "auth") {
           setError("Missing or invalid API key. Open Settings and paste a Replicate token.");
+        } else if (err.error === "payment_required") {
+          setError(err.message ?? "Insufficient credit on the provider account.");
+          if (err.billingUrl) setErrorLink({ href: err.billingUrl, label: "Add credit on Replicate" });
         } else if (err.error === "rate_limit") {
           setError(`Rate limited. Retry after ${err.retryAfterSeconds ?? 30}s.`);
         } else {
@@ -156,6 +162,19 @@ export function GuidanceSweep() {
       {error && (
         <div className="border border-burgundy/40 bg-burgundy/5 text-burgundy p-3 mb-4 font-sans text-body-sm rounded-sm">
           {error}
+          {errorLink && (
+            <>
+              {" "}
+              <a
+                href={errorLink.href}
+                target="_blank"
+                rel="noopener noreferrer"
+                className="underline underline-offset-2 hover:text-burgundy-900"
+              >
+                {errorLink.label} →
+              </a>
+            </>
+          )}
         </div>
       )}
 
