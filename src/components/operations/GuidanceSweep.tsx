@@ -6,7 +6,7 @@ import { useImageBlobCache } from "@/context/ImageBlobCacheContext";
 import type { DiffusionRequest, DiffusionResultMeta } from "@/lib/providers/types";
 
 interface DiffuseResponse {
-  images: string[]; // data URLs
+  images: string[];
   meta: DiffusionResultMeta;
 }
 
@@ -17,6 +17,16 @@ interface GenError {
   billingUrl?: string;
 }
 
+interface SweepRow {
+  cfg: number;
+  status: "pending" | "running" | "ok" | "error";
+  imageDataUrl?: string;
+  meta?: DiffusionResultMeta;
+  errorMessage?: string;
+}
+
+const DEFAULT_CFG_SET = "1, 2.5, 4, 7.5, 12";
+
 function dataUrlToBlob(dataUrl: string): Blob {
   const [header, b64] = dataUrl.split(",");
   const mime = header.match(/data:(.*?);base64/)?.[1] ?? "image/png";
@@ -26,6 +36,18 @@ function dataUrlToBlob(dataUrl: string): Blob {
   return new Blob([buf], { type: mime });
 }
 
+function parseCfgList(raw: string): number[] {
+  return raw
+    .split(/[,\s]+/)
+    .map((s) => parseFloat(s))
+    .filter((n) => Number.isFinite(n) && n >= 0);
+}
+
+function modelIgnoresCfg(modelId: string): boolean {
+  const id = modelId.toLowerCase();
+  return id.includes("schnell") || id.includes("flux-2");
+}
+
 export function GuidanceSweep() {
   const { settings } = useSettings();
   const { set: cacheImage } = useImageBlobCache();
@@ -33,18 +55,16 @@ export function GuidanceSweep() {
   const [prompt, setPrompt] = useState("a red cube on a blue cube, photorealistic");
   const [seed, setSeed] = useState(42);
   const [steps, setSteps] = useState(settings.defaults.steps);
-  const [cfg, setCfg] = useState(settings.defaults.cfg);
+  const [cfgList, setCfgList] = useState(DEFAULT_CFG_SET);
+  const [rows, setRows] = useState<SweepRow[]>([]);
   const [running, setRunning] = useState(false);
-  const [result, setResult] = useState<DiffuseResponse | null>(null);
-  const [error, setError] = useState<string | null>(null);
+  const [topError, setTopError] = useState<string | null>(null);
   const [errorLink, setErrorLink] = useState<{ href: string; label: string } | null>(null);
 
-  async function generate() {
-    setRunning(true);
-    setError(null);
-    setErrorLink(null);
-    setResult(null);
+  const cfgs = parseCfgList(cfgList);
+  const cfgWarning = modelIgnoresCfg(settings.modelId);
 
+  async function runOne(cfg: number): Promise<{ row: Partial<SweepRow>; abortAll?: boolean }> {
     const request: DiffusionRequest = {
       modelId: settings.modelId,
       prompt,
@@ -55,8 +75,8 @@ export function GuidanceSweep() {
       height: settings.defaults.height,
       scheduler: settings.defaults.scheduler,
     };
-
     const apiKey = settings.apiKeys[settings.providerId];
+
     try {
       const res = await fetch("/api/diffuse", {
         method: "POST",
@@ -66,43 +86,72 @@ export function GuidanceSweep() {
         },
         body: JSON.stringify({ providerId: settings.providerId, request }),
       });
-
       if (!res.ok) {
         const err: GenError = await res.json().catch(() => ({ error: "unknown" }));
-        if (err.error === "auth") {
-          setError("Missing or invalid API key. Open Settings and paste a Replicate token.");
-        } else if (err.error === "payment_required") {
-          setError(err.message ?? "Insufficient credit on the provider account.");
-          if (err.billingUrl) setErrorLink({ href: err.billingUrl, label: "Add credit on Replicate" });
-        } else if (err.error === "rate_limit") {
-          setError(`Rate limited. Retry after ${err.retryAfterSeconds ?? 30}s.`);
-        } else {
-          setError(err.message ?? `Generation failed (${res.status}).`);
+        // auth and payment errors abort the whole sweep — same problem will hit every cfg
+        const abortAll = err.error === "auth" || err.error === "payment_required";
+        if (abortAll) {
+          if (err.error === "auth") {
+            setTopError("Missing or invalid API key. Open Settings and paste a token.");
+          } else {
+            setTopError(err.message ?? "Insufficient credit on the provider account.");
+            if (err.billingUrl) setErrorLink({ href: err.billingUrl, label: "Add credit on Replicate" });
+          }
         }
-        return;
+        return {
+          row: { status: "error", errorMessage: err.message ?? `Failed (${res.status})` },
+          abortAll,
+        };
       }
-
       const data: DiffuseResponse = await res.json();
-      setResult(data);
-
-      const runId = `${data.meta.providerId}::${data.meta.modelId}::${seed}::${steps}::${cfg}::${Date.now()}`;
-      await Promise.all(
-        data.images.map((url, i) => cacheImage(`${runId}::${i}`, dataUrlToBlob(url))),
-      );
+      const dataUrl = data.images[0];
+      const runId = `sweep::${data.meta.providerId}::${data.meta.modelId}::${seed}::${steps}::${cfg}::${Date.now()}`;
+      await cacheImage(runId, dataUrlToBlob(dataUrl));
+      return { row: { status: "ok", imageDataUrl: dataUrl, meta: data.meta } };
     } catch (err) {
-      setError(err instanceof Error ? err.message : String(err));
-    } finally {
-      setRunning(false);
+      return { row: { status: "error", errorMessage: err instanceof Error ? err.message : String(err) } };
     }
   }
 
+  async function runSweep() {
+    if (cfgs.length === 0) {
+      setTopError("Enter at least one CFG value.");
+      return;
+    }
+    setRunning(true);
+    setTopError(null);
+    setErrorLink(null);
+    const initial: SweepRow[] = cfgs.map((cfg) => ({ cfg, status: "pending" }));
+    setRows(initial);
+
+    let aborted = false;
+    for (let i = 0; i < cfgs.length; i++) {
+      if (aborted) {
+        setRows((prev) => prev.map((r, j) => (j > i - 1 ? { ...r, status: "error", errorMessage: "Skipped" } : r)));
+        break;
+      }
+      setRows((prev) => prev.map((r, j) => (j === i ? { ...r, status: "running" } : r)));
+      const { row, abortAll } = await runOne(cfgs[i]);
+      setRows((prev) => prev.map((r, j) => (j === i ? { ...r, ...row } : r)));
+      if (abortAll) aborted = true;
+    }
+
+    setRunning(false);
+  }
+
   return (
-    <div className="card-editorial p-6 max-w-3xl">
+    <div className="card-editorial p-6 max-w-4xl">
       <h2 className="font-display text-display-md font-bold text-burgundy mb-2">Guidance Sweep</h2>
       <p className="font-body text-body-sm text-foreground mb-4">
-        Generate the same prompt and seed across CFG values. v0.1.3 ships single-image generation; the parallel sweep
-        across multiple CFGs follows next.
+        Same prompt and seed across a range of CFG values. Reveals the controllability surface and where mode collapse begins.
       </p>
+
+      {cfgWarning && (
+        <div className="border border-gold/40 bg-gold/10 text-foreground p-3 mb-4 font-sans text-caption rounded-sm">
+          The current model (<strong>{settings.modelId}</strong>) does not use a guidance scale.
+          A sweep will produce nearly identical images. For meaningful results switch to <code>black-forest-labs/flux-dev</code> or another CFG-bearing model in Settings.
+        </div>
+      )}
 
       <div className="grid grid-cols-1 gap-3 mb-4">
         <label className="block">
@@ -134,12 +183,12 @@ export function GuidanceSweep() {
             />
           </label>
           <label className="block">
-            <span className="font-sans text-caption uppercase tracking-wider text-muted-foreground">CFG</span>
+            <span className="font-sans text-caption uppercase tracking-wider text-muted-foreground">CFG list</span>
             <input
-              type="number"
-              step="0.5"
-              value={cfg}
-              onChange={(e) => setCfg(parseFloat(e.target.value) || 0)}
+              type="text"
+              value={cfgList}
+              onChange={(e) => setCfgList(e.target.value)}
+              placeholder="1, 2.5, 4, 7.5, 12"
               className="input-editorial mt-1"
             />
           </label>
@@ -148,20 +197,20 @@ export function GuidanceSweep() {
 
       <div className="flex items-center gap-3 mb-4">
         <button
-          onClick={() => void generate()}
+          onClick={() => void runSweep()}
           disabled={running}
           className={running ? "btn-editorial-secondary opacity-50" : "btn-editorial-primary"}
         >
-          {running ? "Generating…" : "Generate"}
+          {running ? "Running sweep…" : `Run sweep (${cfgs.length} ${cfgs.length === 1 ? "image" : "images"})`}
         </button>
         <span className="font-sans text-caption text-muted-foreground">
           {settings.backend === "local" ? "Local" : "Hosted"} · {settings.providerId} · {settings.modelId}
         </span>
       </div>
 
-      {error && (
+      {topError && (
         <div className="border border-burgundy/40 bg-burgundy/5 text-burgundy p-3 mb-4 font-sans text-body-sm rounded-sm">
-          {error}
+          {topError}
           {errorLink && (
             <>
               {" "}
@@ -178,22 +227,35 @@ export function GuidanceSweep() {
         </div>
       )}
 
-      {result && (
+      {rows.length > 0 && (
         <div className="border-t border-parchment pt-4">
-          <div className="grid grid-cols-1 gap-3">
-            {result.images.map((src, i) => (
-              // eslint-disable-next-line @next/next/no-img-element
-              <img key={i} src={src} alt={`Generation ${i}`} className="w-full max-w-xl rounded-sm shadow-editorial" />
+          <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-5 gap-3">
+            {rows.map((row, i) => (
+              <div key={i} className="flex flex-col">
+                <div className="aspect-square bg-cream/50 border border-parchment rounded-sm overflow-hidden flex items-center justify-center">
+                  {row.status === "ok" && row.imageDataUrl && (
+                    // eslint-disable-next-line @next/next/no-img-element
+                    <img src={row.imageDataUrl} alt={`CFG ${row.cfg}`} className="w-full h-full object-cover" />
+                  )}
+                  {row.status === "running" && (
+                    <span className="font-sans text-caption text-muted-foreground">Generating…</span>
+                  )}
+                  {row.status === "pending" && (
+                    <span className="font-sans text-caption text-muted-foreground">Queued</span>
+                  )}
+                  {row.status === "error" && (
+                    <span className="font-sans text-caption text-burgundy text-center px-2">
+                      {row.errorMessage ?? "Failed"}
+                    </span>
+                  )}
+                </div>
+                <div className="mt-1 font-sans text-caption text-muted-foreground text-center">
+                  CFG <span className="text-foreground font-medium">{row.cfg}</span>
+                  {row.meta && <> · {(row.meta.responseTimeMs / 1000).toFixed(1)}s</>}
+                </div>
+              </div>
             ))}
           </div>
-          <dl className="mt-3 grid grid-cols-[120px_1fr] gap-y-1 font-sans text-caption text-muted-foreground">
-            <dt>Provider</dt><dd className="text-foreground">{result.meta.providerId}</dd>
-            <dt>Model</dt><dd className="text-foreground">{result.meta.modelId}</dd>
-            <dt>Seed</dt><dd className="text-foreground">{result.meta.seed}</dd>
-            <dt>Steps</dt><dd className="text-foreground">{result.meta.steps}</dd>
-            <dt>CFG</dt><dd className="text-foreground">{result.meta.cfg}</dd>
-            <dt>Time</dt><dd className="text-foreground">{(result.meta.responseTimeMs / 1000).toFixed(1)}s</dd>
-          </dl>
         </div>
       )}
     </div>
