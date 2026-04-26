@@ -1,0 +1,11 @@
+node_modules
+.next
+.next/dev
+.env*.local
+*.log
+.DS_Store
+backend/__pycache__
+backend/.venv
+backend/*.pyc
+tsconfig.tsbuildinfo
+next-env.d.ts

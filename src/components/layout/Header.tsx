@@ -1,0 +1,69 @@
+"use client";
+
+import { Settings, Moon, Sun } from "lucide-react";
+import { useSettings } from "@/context/DiffusionSettingsContext";
+import { getGroupLabel, type TabId } from "./TabNav";
+import { AboutModal } from "./AboutModal";
+import { HelpDropdown } from "./HelpDropdown";
+
+interface HeaderProps {
+  activeTab?: TabId;
+}
+
+export function Header({ activeTab }: HeaderProps) {
+  const { settings, toggleDarkMode, setSettingsOpen } = useSettings();
+  const viewLabel = activeTab ? getGroupLabel(activeTab) : "";
+
+  return (
+    <header className="border-b border-parchment-dark px-6 py-3 flex items-center justify-between">
+      <div className="flex items-center gap-4">
+        <a
+          href="https://vector-lab-tools.github.io"
+          target="_blank"
+          rel="noopener noreferrer"
+          title="Part of the Vector Lab"
+          className="flex items-center gap-2 hover:opacity-80 transition-opacity"
+        >
+          <span className="font-sans text-caption font-semibold uppercase tracking-[0.15em] text-muted-foreground">
+            Vector Lab
+          </span>
+        </a>
+
+        <span className="h-6 w-px bg-parchment-dark" aria-hidden="true" />
+
+        <div className="flex items-center gap-2.5">
+          <h1 className="font-display text-display-md font-bold text-burgundy tracking-tight leading-none">
+            Diffusion Atlas
+          </h1>
+        </div>
+
+        {viewLabel && (
+          <>
+            <span className="h-6 w-px bg-parchment-dark" aria-hidden="true" />
+            <span className="font-sans text-body-sm text-muted-foreground">
+              {viewLabel}
+            </span>
+          </>
+        )}
+      </div>
+      <div className="flex items-center gap-2">
+        <AboutModal />
+        <HelpDropdown />
+        <button
+          onClick={toggleDarkMode}
+          className="btn-editorial-ghost px-3 py-2"
+          aria-label="Toggle dark mode"
+        >
+          {settings.darkMode ? <Sun size={16} /> : <Moon size={16} />}
+        </button>
+        <button
+          onClick={() => setSettingsOpen(true)}
+          className="btn-editorial-secondary px-3 py-2"
+        >
+          <Settings size={16} className="mr-2" />
+          <span className="font-sans text-body-sm">Settings</span>
+        </button>
+      </div>
+    </header>
+  );
+}
