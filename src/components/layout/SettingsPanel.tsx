@@ -1,5 +1,6 @@
 "use client";
 
+import { useEffect, useState } from "react";
 import { X } from "lucide-react";
 import { useSettings, type Backend, type ProviderId } from "@/context/DiffusionSettingsContext";
 import { useLatentCache } from "@/context/LatentCacheContext";
@@ -11,6 +12,33 @@ export function SettingsPanel() {
   const { settings, setSettings, settingsOpen, setSettingsOpen } = useSettings();
   const { count: latentCount, clear: clearLatents } = useLatentCache();
   const { count: imageCount, clear: clearImages } = useImageBlobCache();
+  const [keyStatus, setKeyStatus] = useState<"idle" | "saving" | "saved" | "error">("idle");
+
+  // Hydrate keys from .env.local once when the panel opens.
+  useEffect(() => {
+    if (!settingsOpen) return;
+    let cancelled = false;
+    void (async () => {
+      try {
+        const res = await fetch("/api/keys");
+        if (!res.ok) return;
+        const stored: Partial<Record<ProviderId, string>> = await res.json();
+        if (cancelled) return;
+        const missing: Partial<Record<ProviderId, string>> = {};
+        for (const [pid, val] of Object.entries(stored) as [ProviderId, string][]) {
+          if (!settings.apiKeys[pid] && val) missing[pid] = val;
+        }
+        if (Object.keys(missing).length > 0) {
+          setSettings({ ...settings, apiKeys: { ...settings.apiKeys, ...missing } });
+        }
+      } catch {
+        /* offline or no .env.local — fine */
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [settingsOpen]); // eslint-disable-line react-hooks/exhaustive-deps
 
   if (!settingsOpen) return null;
 
@@ -18,6 +46,21 @@ export function SettingsPanel() {
   const setProvider = (providerId: ProviderId) => setSettings({ ...settings, providerId });
   const setApiKey = (provider: ProviderId, key: string) =>
     setSettings({ ...settings, apiKeys: { ...settings.apiKeys, [provider]: key } });
+
+  async function persistKeys() {
+    setKeyStatus("saving");
+    try {
+      const res = await fetch("/api/keys", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(settings.apiKeys),
+      });
+      setKeyStatus(res.ok ? "saved" : "error");
+      if (res.ok) setTimeout(() => setKeyStatus("idle"), 2000);
+    } catch {
+      setKeyStatus("error");
+    }
+  }
 
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center bg-ink/40">
@@ -86,6 +129,17 @@ export function SettingsPanel() {
                 />
               </div>
             ))}
+            <div className="mt-3 flex items-center gap-3">
+              <button onClick={() => void persistKeys()} className="btn-editorial-secondary px-3 py-2">
+                Save to .env.local
+              </button>
+              <span className="font-sans text-caption text-muted-foreground">
+                {keyStatus === "saving" && "Saving…"}
+                {keyStatus === "saved" && "Saved"}
+                {keyStatus === "error" && "Save failed"}
+                {keyStatus === "idle" && "Persists keys across dev restarts"}
+              </span>
+            </div>
           </section>
         ) : (
           <section className="mb-6">
