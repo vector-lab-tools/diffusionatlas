@@ -64,7 +64,7 @@ export function GuidanceSweep() {
   const cfgs = parseCfgList(cfgList);
   const cfgWarning = modelIgnoresCfg(settings.modelId);
 
-  async function runOne(cfg: number): Promise<{ row: Partial<SweepRow>; abortAll?: boolean }> {
+  async function callOnce(cfg: number): Promise<{ ok: boolean; data?: DiffuseResponse; err?: GenError; status?: number }> {
     const request: DiffusionRequest = {
       modelId: settings.modelId,
       prompt,
@@ -88,29 +88,58 @@ export function GuidanceSweep() {
       });
       if (!res.ok) {
         const err: GenError = await res.json().catch(() => ({ error: "unknown" }));
-        // auth and payment errors abort the whole sweep — same problem will hit every cfg
-        const abortAll = err.error === "auth" || err.error === "payment_required";
-        if (abortAll) {
-          if (err.error === "auth") {
-            setTopError("Missing or invalid API key. Open Settings and paste a token.");
-          } else {
-            setTopError(err.message ?? "Insufficient credit on the provider account.");
-            if (err.billingUrl) setErrorLink({ href: err.billingUrl, label: "Add credit on Replicate" });
-          }
-        }
-        return {
-          row: { status: "error", errorMessage: err.message ?? `Failed (${res.status})` },
-          abortAll,
-        };
+        return { ok: false, err, status: res.status };
       }
       const data: DiffuseResponse = await res.json();
-      const dataUrl = data.images[0];
-      const runId = `sweep::${data.meta.providerId}::${data.meta.modelId}::${seed}::${steps}::${cfg}::${Date.now()}`;
-      await cacheImage(runId, dataUrlToBlob(dataUrl));
-      return { row: { status: "ok", imageDataUrl: dataUrl, meta: data.meta } };
+      return { ok: true, data };
     } catch (err) {
-      return { row: { status: "error", errorMessage: err instanceof Error ? err.message : String(err) } };
+      return { ok: false, err: { error: "network", message: err instanceof Error ? err.message : String(err) } };
     }
+  }
+
+  function setRowAt(idx: number, patch: Partial<SweepRow>) {
+    setRows((prev) => prev.map((r, j) => (j === idx ? { ...r, ...patch } : r)));
+  }
+
+  async function runOne(cfg: number, idx: number): Promise<{ abortAll?: boolean }> {
+    const MAX_ATTEMPTS = 4;
+    for (let attempt = 1; attempt <= MAX_ATTEMPTS; attempt++) {
+      const r = await callOnce(cfg);
+      if (r.ok && r.data) {
+        const dataUrl = r.data.images[0];
+        const runId = `sweep::${r.data.meta.providerId}::${r.data.meta.modelId}::${seed}::${steps}::${cfg}::${Date.now()}`;
+        await cacheImage(runId, dataUrlToBlob(dataUrl));
+        setRowAt(idx, { status: "ok", imageDataUrl: dataUrl, meta: r.data.meta });
+        return {};
+      }
+
+      const err = r.err ?? { error: "unknown" };
+      if (err.error === "rate_limit" && attempt < MAX_ATTEMPTS) {
+        const wait = (err.retryAfterSeconds ?? 5) + 1;
+        for (let s = wait; s > 0; s--) {
+          setRowAt(idx, { status: "running", errorMessage: `Rate limited; retrying in ${s}s` });
+          await new Promise((res) => setTimeout(res, 1000));
+        }
+        setRowAt(idx, { status: "running", errorMessage: undefined });
+        continue;
+      }
+
+      if (err.error === "auth" || err.error === "payment_required") {
+        if (err.error === "auth") {
+          setTopError("Missing or invalid API key. Open Settings and paste a token.");
+        } else {
+          setTopError(err.message ?? "Insufficient credit on the provider account.");
+          if (err.billingUrl) setErrorLink({ href: err.billingUrl, label: "Add credit on Replicate" });
+        }
+        setRowAt(idx, { status: "error", errorMessage: err.message ?? "Aborted" });
+        return { abortAll: true };
+      }
+
+      setRowAt(idx, { status: "error", errorMessage: err.message ?? `Failed (${r.status ?? "?"})` });
+      return {};
+    }
+    setRowAt(idx, { status: "error", errorMessage: "Rate limited; gave up after retries" });
+    return {};
   }
 
   async function runSweep() {
@@ -127,13 +156,14 @@ export function GuidanceSweep() {
     let aborted = false;
     for (let i = 0; i < cfgs.length; i++) {
       if (aborted) {
-        setRows((prev) => prev.map((r, j) => (j > i - 1 ? { ...r, status: "error", errorMessage: "Skipped" } : r)));
+        setRows((prev) => prev.map((r, j) => (j >= i ? { ...r, status: "error", errorMessage: "Skipped" } : r)));
         break;
       }
-      setRows((prev) => prev.map((r, j) => (j === i ? { ...r, status: "running" } : r)));
-      const { row, abortAll } = await runOne(cfgs[i]);
-      setRows((prev) => prev.map((r, j) => (j === i ? { ...r, ...row } : r)));
+      setRowAt(i, { status: "running" });
+      const { abortAll } = await runOne(cfgs[i], i);
       if (abortAll) aborted = true;
+      // small space-out between calls to ride under the rate limit
+      if (i < cfgs.length - 1) await new Promise((res) => setTimeout(res, 1500));
     }
 
     setRunning(false);
