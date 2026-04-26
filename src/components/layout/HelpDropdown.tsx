@@ -80,22 +80,33 @@ export function HelpDropdown() {
             style={{ maxHeight: "calc(100vh - 2rem)" }}
           >
             <div className="p-4 border-b border-parchment flex items-center justify-between flex-shrink-0">
-              <div>
-                <h2 className="font-display text-display-md font-bold">Diffusion Atlas Guide</h2>
-                <p className="font-sans text-caption text-muted-foreground mt-0.5">
-                  Key concepts for reading diffusion models geometrically
-                </p>
-                <p className="font-sans text-caption text-muted-foreground mt-1">
-                  Part of the{" "}
-                  <a
-                    href="https://vector-lab-tools.github.io"
-                    target="_blank"
-                    rel="noopener noreferrer"
-                    className="text-burgundy underline underline-offset-2 hover:text-burgundy-900"
-                  >
-                    Vector Lab
-                  </a>
-                </p>
+              <div className="flex items-start gap-3">
+                {/* eslint-disable-next-line @next/next/no-img-element */}
+                <img
+                  src="/icons/vector-lab-diffusion-atlas.svg"
+                  alt=""
+                  width={32}
+                  height={32}
+                  aria-hidden="true"
+                  className="block flex-shrink-0 mt-0.5"
+                />
+                <div>
+                  <h2 className="font-display text-display-md font-bold">Diffusion Atlas Guide</h2>
+                  <p className="font-sans text-caption text-muted-foreground mt-0.5">
+                    Key concepts for reading diffusion models geometrically
+                  </p>
+                  <p className="font-sans text-caption text-muted-foreground mt-1">
+                    Part of the{" "}
+                    <a
+                      href="https://vector-lab-tools.github.io"
+                      target="_blank"
+                      rel="noopener noreferrer"
+                      className="text-burgundy underline underline-offset-2 hover:text-burgundy-900"
+                    >
+                      Vector Lab
+                    </a>
+                  </p>
+                </div>
               </div>
               <button onClick={() => setOpen(false)} className="btn-editorial-ghost px-2 py-1">
                 <X size={16} />

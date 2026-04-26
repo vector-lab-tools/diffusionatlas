@@ -25,11 +25,22 @@ export function AboutModal() {
             style={{ maxHeight: "calc(100vh - 2rem)" }}
           >
             <div className="px-6 pt-6 pb-4 flex items-start justify-between flex-shrink-0">
-              <div>
-                <h2 className="font-display text-display-lg font-bold text-burgundy">Diffusion Atlas</h2>
-                <p className="font-sans text-caption text-muted-foreground mt-0.5">
-                  Manifold geometry and benchmarking for diffusion models
-                </p>
+              <div className="flex items-start gap-3">
+                {/* eslint-disable-next-line @next/next/no-img-element */}
+                <img
+                  src="/icons/vector-lab-diffusion-atlas.svg"
+                  alt=""
+                  width={40}
+                  height={40}
+                  aria-hidden="true"
+                  className="block flex-shrink-0 mt-1"
+                />
+                <div>
+                  <h2 className="font-display text-display-lg font-bold text-burgundy">Diffusion Atlas</h2>
+                  <p className="font-sans text-caption text-muted-foreground mt-0.5">
+                    Manifold geometry and benchmarking for diffusion models
+                  </p>
+                </div>
               </div>
               <button onClick={() => setOpen(false)} className="btn-editorial-ghost px-2 py-1">
                 <X size={16} />
@@ -93,18 +104,39 @@ export function AboutModal() {
                 <h3 className="font-sans text-caption text-muted-foreground uppercase tracking-wider font-semibold mb-2">
                   Part of the Vector Lab
                 </h3>
-                <p className="font-body text-body-sm text-slate leading-relaxed">
-                  Diffusion Atlas is one of the research instruments in the{" "}
-                  <a
-                    href="https://vector-lab-tools.github.io"
-                    target="_blank"
-                    rel="noopener noreferrer"
-                    className="text-burgundy underline underline-offset-2 hover:text-burgundy-900"
-                  >
-                    Vector Lab
-                  </a>
-                  . <strong>Diffusion Atlas reads the generative trajectory.</strong>
-                </p>
+                <div className="flex items-start gap-3">
+                  {/* eslint-disable-next-line @next/next/no-img-element */}
+                  <img
+                    src="/icons/vector-lab-logo-mark.svg"
+                    alt=""
+                    width={32}
+                    height={32}
+                    aria-hidden="true"
+                    className="block flex-shrink-0 mt-0.5 opacity-90"
+                  />
+                  <div className="font-body text-body-sm text-slate leading-relaxed">
+                    <p>
+                      Diffusion Atlas is one of the research instruments in the{" "}
+                      <a
+                        href="https://vector-lab-tools.github.io"
+                        target="_blank"
+                        rel="noopener noreferrer"
+                        className="text-burgundy underline underline-offset-2 hover:text-burgundy-900"
+                      >
+                        Vector Lab
+                      </a>
+                      . <strong>Diffusion Atlas reads the generative trajectory.</strong>
+                    </p>
+                    <p className="mt-2 font-sans text-caption">
+                      Sibling instruments:{" "}
+                      <a href="https://github.com/vector-lab-tools/manifold-atlas" target="_blank" rel="noopener noreferrer" className="text-burgundy underline underline-offset-2">Manifold Atlas</a>{" · "}
+                      <a href="https://github.com/vector-lab-tools/LLMbench" target="_blank" rel="noopener noreferrer" className="text-burgundy underline underline-offset-2">LLMbench</a>{" · "}
+                      <a href="https://github.com/vector-lab-tools/vectorscope" target="_blank" rel="noopener noreferrer" className="text-burgundy underline underline-offset-2">Vectorscope</a>{" · "}
+                      <a href="https://github.com/vector-lab-tools/manifoldscope" target="_blank" rel="noopener noreferrer" className="text-burgundy underline underline-offset-2">Manifoldscope</a>{" · "}
+                      <a href="https://github.com/vector-lab-tools/theoryscope" target="_blank" rel="noopener noreferrer" className="text-burgundy underline underline-offset-2">Theoryscope</a>
+                    </p>
+                  </div>
+                </div>
               </div>
 
               <div className="px-6 py-4 border-t border-parchment flex items-center gap-4 font-sans text-body-sm">

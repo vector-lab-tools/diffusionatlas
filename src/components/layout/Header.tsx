@@ -24,6 +24,15 @@ export function Header({ activeTab }: HeaderProps) {
           title="Part of the Vector Lab"
           className="flex items-center gap-2 hover:opacity-80 transition-opacity"
         >
+          {/* eslint-disable-next-line @next/next/no-img-element */}
+          <img
+            src="/icons/vector-lab-logo-mark.svg"
+            alt=""
+            aria-hidden="true"
+            width={22}
+            height={22}
+            className="block opacity-70"
+          />
           <span className="font-sans text-caption font-semibold uppercase tracking-[0.15em] text-muted-foreground">
             Vector Lab
           </span>
@@ -32,6 +41,15 @@ export function Header({ activeTab }: HeaderProps) {
         <span className="h-6 w-px bg-parchment-dark" aria-hidden="true" />
 
         <div className="flex items-center gap-2.5">
+          {/* eslint-disable-next-line @next/next/no-img-element */}
+          <img
+            src={settings.darkMode ? "/icons/vector-lab-diffusion-atlas-dark.svg" : "/icons/vector-lab-diffusion-atlas.svg"}
+            alt=""
+            aria-hidden="true"
+            width={26}
+            height={26}
+            className="block flex-shrink-0"
+          />
           <h1 className="font-display text-display-md font-bold text-burgundy tracking-tight leading-none">
             Diffusion Atlas
           </h1>

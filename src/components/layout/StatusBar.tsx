@@ -54,6 +54,15 @@ export function StatusBar({ lastQueryTime }: StatusBarProps) {
         title="Part of the Vector Lab"
         className="ml-auto flex items-center gap-1.5 hover:text-foreground transition-colors"
       >
+        {/* eslint-disable-next-line @next/next/no-img-element */}
+        <img
+          src="/icons/vector-lab-logo-mark.svg"
+          alt=""
+          width={14}
+          height={14}
+          aria-hidden="true"
+          className="block opacity-80"
+        />
         <span>Part of the Vector Lab</span>
       </a>
     </footer>
