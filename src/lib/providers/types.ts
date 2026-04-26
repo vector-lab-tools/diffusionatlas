@@ -4,6 +4,7 @@
  */
 
 export type Backend = "hosted" | "local";
+export type ProviderId = "replicate" | "fal" | "together" | "stability" | "local";
 
 export interface DiffusionRequest {
   modelId: string;
@@ -41,7 +42,7 @@ export interface StepFrame {
 }
 
 export interface DiffusionProvider {
-  id: "replicate" | "fal" | "together" | "stability" | "local";
+  id: ProviderId;
   backend: Backend;
   capabilities: {
     perStepLatents: boolean;

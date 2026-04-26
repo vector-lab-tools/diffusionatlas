@@ -1,9 +1,9 @@
 "use client";
 
 import { createContext, useContext, useEffect, useState, type ReactNode } from "react";
+import { type Backend, type ProviderId } from "@/lib/providers/types";
 
-export type Backend = "hosted" | "local";
-export type ProviderId = "replicate" | "fal" | "together" | "stability" | "local";
+export type { Backend, ProviderId };
 
 export interface DiffusionSettings {
   backend: Backend;
