@@ -5,5 +5,5 @@
  *
  * Single source of truth for the application version.
  */
-export const VERSION = "0.1.3";
+export const VERSION = "0.1.4";
 export const VERSION_DATE = "27 April 2026";

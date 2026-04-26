@@ -16,18 +16,67 @@ import {
   RateLimitError,
 } from "./types";
 
-interface ReplicateInput {
-  prompt: string;
-  negative_prompt?: string;
-  seed?: number;
-  num_inference_steps?: number;
-  guidance_scale?: number;
-  width?: number;
-  height?: number;
-  scheduler?: string;
+type ReplicateInput = Record<string, unknown>;
+
+/**
+ * Replicate models expose different input schemas:
+ * - flux-2-* takes { prompt, resolution, aspect_ratio, output_format, ... }
+ * - flux-1-* / schnell / dev takes { prompt, aspect_ratio, num_inference_steps, ... }
+ * - SDXL-shaped models (bytedance/sdxl-lightning, older forks) take
+ *   { prompt, num_inference_steps, guidance_scale, width, height, ... }
+ *
+ * We detect the family from modelId and build the matching shape.
+ */
+function aspectRatio(w: number, h: number): string {
+  if (w === h) return "1:1";
+  if (w > h) {
+    if (Math.abs(w / h - 16 / 9) < 0.05) return "16:9";
+    if (Math.abs(w / h - 4 / 3) < 0.05) return "4:3";
+    if (Math.abs(w / h - 3 / 2) < 0.05) return "3:2";
+  } else {
+    if (Math.abs(h / w - 16 / 9) < 0.05) return "9:16";
+    if (Math.abs(h / w - 4 / 3) < 0.05) return "3:4";
+    if (Math.abs(h / w - 3 / 2) < 0.05) return "2:3";
+  }
+  return "1:1";
+}
+
+function resolutionMP(w: number, h: number): string {
+  const mp = (w * h) / 1_000_000;
+  if (mp < 0.75) return "0.5 MP";
+  if (mp < 1.5) return "1 MP";
+  return "2 MP";
 }
 
 function buildInput(req: DiffusionRequest): ReplicateInput {
+  const id = req.modelId.toLowerCase();
+  const ratio = aspectRatio(req.width, req.height);
+
+  if (id.includes("flux-2")) {
+    return {
+      prompt: req.prompt,
+      resolution: resolutionMP(req.width, req.height),
+      aspect_ratio: ratio,
+      output_format: "png",
+      output_quality: 90,
+      safety_tolerance: 2,
+    };
+  }
+
+  if (id.startsWith("black-forest-labs/flux")) {
+    // flux-1 family (schnell, dev, pro)
+    return {
+      prompt: req.prompt,
+      aspect_ratio: ratio,
+      num_inference_steps: req.steps,
+      output_format: "png",
+      output_quality: 90,
+      ...(id.includes("schnell") ? {} : { guidance: req.cfg }),
+      ...(req.seed !== undefined ? { seed: req.seed } : {}),
+    };
+  }
+
+  // SDXL-shaped fallback
   return {
     prompt: req.prompt,
     negative_prompt: req.negativePrompt,
@@ -54,7 +103,7 @@ export const replicateProvider: DiffusionProvider = {
   async generate(req, apiKey) {
     if (!apiKey) throw new AuthError("replicate");
 
-    const client = new Replicate({ auth: apiKey });
+    const client = new Replicate({ auth: apiKey, useFileOutput: false });
     const startedAt = Date.now();
 
     let outputs: unknown;

@@ -24,8 +24,8 @@ export interface DiffusionSettings {
 const DEFAULT_SETTINGS: DiffusionSettings = {
   backend: "hosted",
   providerId: "replicate",
-  modelId: "stability-ai/sdxl",
-  defaults: { steps: 30, cfg: 7.5, width: 1024, height: 1024, scheduler: "DPMSolverMultistep" },
+  modelId: "black-forest-labs/flux-schnell",
+  defaults: { steps: 4, cfg: 0, width: 1024, height: 1024, scheduler: "DPMSolverMultistep" },
   localBaseUrl: "http://localhost:8000",
   apiKeys: {},
   darkMode: false,
