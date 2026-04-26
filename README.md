@@ -228,8 +228,8 @@ The Atlas operations test specific claims of the framework. Denoise Trajectory m
 - Berry, D. M. (2026) *Artificial Intelligence and Critical Theory*. MUP.
 - Ho, J. and Salimans, T. (2022) 'Classifier-Free Diffusion Guidance'. Available at: https://arxiv.org/abs/2207.12598
 - Ghosh, D. et al. (2023) 'GenEval: An Object-Focused Framework for Evaluating Text-to-Image Alignment'. Available at: https://arxiv.org/abs/2310.11513
-- Rombach, R. et al. (2022) 'High-Resolution Image Synthesis with Latent Diffusion Models'. *CVPR*.
-- Park, Y.-H. et al. (2023) 'Understanding the Latent Space of Diffusion Models through the Lens of Riemannian Geometry'.
+- Rombach, R. et al. (2022) 'High-Resolution Image Synthesis with Latent Diffusion Models'. *CVPR*. Available at: https://arxiv.org/abs/2112.10752
+- Park, Y.-H. et al. (2023) 'Understanding the Latent Space of Diffusion Models through the Lens of Riemannian Geometry'. Available at: https://arxiv.org/abs/2307.12868
 
 ## Acknowledgements
 
