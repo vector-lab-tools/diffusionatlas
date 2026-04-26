@@ -49,7 +49,14 @@ export function DiffusionSettingsProvider({ children }: { children: ReactNode })
   useEffect(() => {
     try {
       const raw = localStorage.getItem(STORAGE_KEY);
-      if (raw) setSettingsState({ ...DEFAULT_SETTINGS, ...JSON.parse(raw) });
+      if (!raw) return;
+      const stored = JSON.parse(raw) as Partial<DiffusionSettings>;
+      // Migrate archived/deprecated model IDs to the current default.
+      const ARCHIVED = new Set(["stability-ai/sdxl", "stability-ai/stable-diffusion"]);
+      if (stored.modelId && ARCHIVED.has(stored.modelId)) {
+        stored.modelId = DEFAULT_SETTINGS.modelId;
+      }
+      setSettingsState({ ...DEFAULT_SETTINGS, ...stored });
     } catch {}
   }, []);
 
