@@ -32,8 +32,8 @@ export function GuidanceSweep() {
 
   const [prompt, setPrompt] = useState("a red cube on a blue cube, photorealistic");
   const [seed, setSeed] = useState(42);
-  const [steps, setSteps] = useState(25);
-  const [cfg, setCfg] = useState(7.5);
+  const [steps, setSteps] = useState(settings.defaults.steps);
+  const [cfg, setCfg] = useState(settings.defaults.cfg);
   const [running, setRunning] = useState(false);
   const [result, setResult] = useState<DiffuseResponse | null>(null);
   const [error, setError] = useState<string | null>(null);

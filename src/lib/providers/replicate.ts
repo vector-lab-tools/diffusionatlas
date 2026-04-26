@@ -65,14 +65,17 @@ function buildInput(req: DiffusionRequest): ReplicateInput {
   }
 
   if (id.startsWith("black-forest-labs/flux")) {
-    // flux-1 family (schnell, dev, pro)
+    // flux-1 family (schnell, dev, pro). Schnell is a 4-step distilled
+    // model and rejects num_inference_steps > 4 with a 422; clamp here.
+    const isSchnell = id.includes("schnell");
+    const steps = isSchnell ? Math.min(Math.max(req.steps, 1), 4) : req.steps;
     return {
       prompt: req.prompt,
       aspect_ratio: ratio,
-      num_inference_steps: req.steps,
+      num_inference_steps: steps,
       output_format: "png",
       output_quality: 90,
-      ...(id.includes("schnell") ? {} : { guidance: req.cfg }),
+      ...(isSchnell ? {} : { guidance: req.cfg }),
       ...(req.seed !== undefined ? { seed: req.seed } : {}),
     };
   }

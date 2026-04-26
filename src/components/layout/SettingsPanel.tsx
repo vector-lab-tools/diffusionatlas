@@ -1,7 +1,7 @@
 "use client";
 
 import { useEffect, useState } from "react";
-import { X } from "lucide-react";
+import { X, Eye, EyeOff } from "lucide-react";
 import { useSettings, type Backend, type ProviderId } from "@/context/DiffusionSettingsContext";
 import { useLatentCache } from "@/context/LatentCacheContext";
 import { useImageBlobCache } from "@/context/ImageBlobCacheContext";
@@ -13,6 +13,16 @@ export function SettingsPanel() {
   const { count: latentCount, clear: clearLatents } = useLatentCache();
   const { count: imageCount, clear: clearImages } = useImageBlobCache();
   const [keyStatus, setKeyStatus] = useState<"idle" | "saving" | "saved" | "error">("idle");
+  const [visibleKeys, setVisibleKeys] = useState<Set<ProviderId>>(new Set());
+
+  const toggleKeyVisibility = (pid: ProviderId) => {
+    setVisibleKeys((prev) => {
+      const next = new Set(prev);
+      if (next.has(pid)) next.delete(pid);
+      else next.add(pid);
+      return next;
+    });
+  };
 
   // Hydrate keys from .env.local once when the panel opens.
   useEffect(() => {
@@ -120,13 +130,23 @@ export function SettingsPanel() {
                 <label className="font-sans text-caption text-muted-foreground block mb-1">
                   {p}
                 </label>
-                <input
-                  type="password"
-                  value={settings.apiKeys[p] ?? ""}
-                  onChange={(e) => setApiKey(p, e.target.value)}
-                  className="input-editorial"
-                  placeholder={`${p} API key`}
-                />
+                <div className="relative">
+                  <input
+                    type={visibleKeys.has(p) ? "text" : "password"}
+                    value={settings.apiKeys[p] ?? ""}
+                    onChange={(e) => setApiKey(p, e.target.value)}
+                    className="input-editorial pr-10"
+                    placeholder={`${p} API key`}
+                  />
+                  <button
+                    type="button"
+                    onClick={() => toggleKeyVisibility(p)}
+                    className="absolute right-2 top-1/2 -translate-y-1/2 text-muted-foreground hover:text-foreground transition-colors p-1"
+                    title={visibleKeys.has(p) ? "Hide API key" : "Show API key"}
+                  >
+                    {visibleKeys.has(p) ? <EyeOff size={16} /> : <Eye size={16} />}
+                  </button>
+                </div>
               </div>
             ))}
             <div className="mt-3 flex items-center gap-3">
