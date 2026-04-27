@@ -11,7 +11,7 @@
 
 **Author:** David M. Berry
 **Institution:** University of Sussex
-**Version:** 0.3.0
+**Version:** 0.3.1
 **Date:** 28 April 2026
 **Licence:** MIT
 
@@ -61,6 +61,8 @@ Generate the same prompt and seed across a list of CFG values (default `1, 2.5, 
 
 ### Latent Neighbourhood
 Sample k images around an anchor seed at a configurable radius. Deterministic seed offsets so the run is reproducible. Hosted mode samples by varying the seed (each seed maps to a different starting latent); true Gaussian perturbation of the initial latent at a chosen sigma is queued for the local backend.
+
+**Cross-backend comparison** (v0.3.1): tick *Compare with a second provider* to run the same anchor + seed offsets against a second provider in parallel. Two thumbnail grids stack with their provider labels, so you can see how a 24 GB local SD 1.5 and a hosted flux-schnell organise the local manifold around the same prompt. Where the two neighbourhoods cluster differently is where the geometry is contingent on the model rather than structural to diffusion.
 
 ### Compositional Bench
 GenEval-lite task pack: 4 categories (single object, two objects, counting, colour binding) × 3 prompts each = 12 tasks. Generate the pack at a fixed seed; mark each result pass or fail with the live per-category scoring panel, **or** click *Auto-score (CLIP)* to score every image against its prompt with `openai/clip-vit-base-patch32` on the local backend and set verdicts from cosine similarity at a configurable threshold (0.25 is the conventional cutoff). Each card shows the numeric score; verdicts can be overridden manually at any time.
@@ -229,7 +231,8 @@ The Atlas operations test specific claims of the framework. Denoise Trajectory m
 - [x] CLIP-based auto-scoring for Compositional Bench (v0.2.3)
 - [x] Fal.ai hosted provider + UMAP toggle on the trajectory projection (v0.2.4)
 - [x] Cross-backend agreement view in Guidance Sweep (v0.3.0) — same prompt + seed, two providers in parallel, side-by-side grids and drift curves
-- [ ] Cross-backend comparison extended to Latent Neighbourhood and Compositional Bench
+- [x] Cross-backend comparison extended to Latent Neighbourhood (v0.3.1)
+- [ ] Cross-backend comparison extended to Compositional Bench
 - [ ] Object-detection-based bench scoring (proper GenEval rather than CLIP cosine)
 - [ ] UMAP option for trajectory and neighbourhood
 - [ ] PDF export across operations
