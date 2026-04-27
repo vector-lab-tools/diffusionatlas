@@ -19,6 +19,7 @@ import { ExportButtons } from "@/components/shared/ExportButtons";
 import { downloadCsv } from "@/lib/export/csv";
 import { downloadPdf } from "@/lib/export/pdf";
 import { downloadJson } from "@/lib/export/json";
+import { lookup as lookupTerm, termsFor } from "@/lib/docs/glossary";
 
 interface DiffuseResponse {
   images: string[];
@@ -90,7 +91,7 @@ function computeScores(rows: BenchRow[]): LaneScores {
 }
 
 export function CompositionalBench() {
-  const { settings } = useSettings();
+  const { settings, setSettingsOpen } = useSettings();
   const { set: cacheImage } = useImageBlobCache();
 
   const [seed, setSeed] = useState(42);
@@ -102,6 +103,7 @@ export function CompositionalBench() {
   const [clipThreshold, setClipThreshold] = useState(0.25);
   const [topError, setTopError] = useState<string | null>(null);
   const [errorLink, setErrorLink] = useState<{ href: string; label: string } | null>(null);
+  const [errorAction, setErrorAction] = useState<{ label: string; onClick: () => void } | null>(null);
 
   // Cross-backend comparison state
   const [compareEnabled, setCompareEnabled] = useState(false);
@@ -296,6 +298,9 @@ export function CompositionalBench() {
       });
       if (!res.ok) {
         const text = await res.text().catch(() => "");
+        if (res.status === 404) {
+          return `Local backend at ${settings.localBaseUrl} returned 404 for /score. Your uvicorn process is likely running a pre-v0.2.3 build. Stop it and restart: cd backend && uvicorn main:app --reload --port 8000`;
+        }
         return `Local backend ${res.status}: ${text.slice(0, 400)}`;
       }
       const data: { scores: number[]; modelId: string } = await res.json();
@@ -328,6 +333,7 @@ export function CompositionalBench() {
 
     setScoring(true);
     setTopError(null);
+    setErrorAction(null);
     const results = await Promise.all([
       scoreLane(rows, setRows),
       compareEnabled ? scoreLane(rowsB, setRowsB) : Promise.resolve(null),
@@ -355,8 +361,8 @@ export function CompositionalBench() {
       </div>
 
       <div className="grid grid-cols-3 gap-3 mb-4">
-        <label className="block">
-          <span className="font-sans text-caption uppercase tracking-wider text-muted-foreground">Seed</span>
+        <label className="block" title={lookupTerm("Seed")}>
+          <span className="font-sans text-caption uppercase tracking-wider text-muted-foreground cursor-help underline decoration-dotted decoration-muted-foreground/40 underline-offset-4">Seed</span>
           <input
             type="number"
             value={seed}
@@ -364,8 +370,8 @@ export function CompositionalBench() {
             className="input-editorial mt-1"
           />
         </label>
-        <label className="block">
-          <span className="font-sans text-caption uppercase tracking-wider text-muted-foreground">Steps</span>
+        <label className="block" title={lookupTerm("Steps")}>
+          <span className="font-sans text-caption uppercase tracking-wider text-muted-foreground cursor-help underline decoration-dotted decoration-muted-foreground/40 underline-offset-4">Steps</span>
           <input
             type="number"
             value={steps}
@@ -440,8 +446,8 @@ export function CompositionalBench() {
         >
           {scoring ? "Scoring…" : "Auto-score (CLIP)"}
         </button>
-        <label className="flex items-center gap-2 font-sans text-caption text-muted-foreground">
-          Threshold
+        <label className="flex items-center gap-2 font-sans text-caption text-muted-foreground" title={lookupTerm("Threshold")}>
+          <span className="cursor-help underline decoration-dotted decoration-muted-foreground/40 underline-offset-4">Threshold</span>
           <input
             type="number"
             step="0.01"
@@ -461,6 +467,17 @@ export function CompositionalBench() {
       {topError && (
         <div className="border border-burgundy/40 bg-burgundy/5 text-burgundy p-3 mb-4 font-sans text-body-sm rounded-sm">
           {topError}
+          {errorAction && (
+            <>
+              {" "}
+              <button
+                onClick={errorAction.onClick}
+                className="underline underline-offset-2 hover:text-burgundy-900 font-medium"
+              >
+                {errorAction.label} →
+              </button>
+            </>
+          )}
           {errorLink && (
             <>
               {" "}
@@ -694,6 +711,11 @@ function BenchDeepDive({ seed, steps, clipThreshold, primaryLabel, rowsA, scores
         caption: `compare · ${r.task.id} · ${r.verdict ?? "—"}`,
       })) : []),
     ];
+    const summaryHeaders = ["lane", ...categoryHeaders];
+    const summaryRows: Array<Array<string | number>> = [
+      ...categoryRows(scoresA).map((r) => ["primary", ...r]),
+      ...(compareEnabled ? categoryRows(scoresB).map((r) => ["compare", ...r]) : []),
+    ];
     downloadPdf(`${stamp}.pdf`, {
       meta: {
         title: "Compositional Bench",
@@ -705,8 +727,16 @@ function BenchDeepDive({ seed, steps, clipThreshold, primaryLabel, rowsA, scores
           { label: "Tasks", value: TASKS.length },
         ],
       },
-      table: { headers: ["lane", ...taskHeaders], rows: taskTableRows },
+      table: { headers: summaryHeaders, rows: summaryRows },
       images,
+      appendix: [
+        {
+          title: "Per-task results",
+          caption: "Every task in the pack with its category, prompt, status, verdict, CLIP score (where available), provider, model, and response time. With Compare on, both lanes are interleaved.",
+          table: { headers: ["lane", ...taskHeaders], rows: taskTableRows },
+        },
+      ],
+      glossary: termsFor(["Seed", "Steps", "Threshold", "lane", "task", "category", "verdict", "CLIP", "status", "provider", "model", "time", "pass", "fail", "pending", "accuracy"]),
     });
   }
 

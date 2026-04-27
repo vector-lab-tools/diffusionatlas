@@ -31,10 +31,27 @@ export interface PdfImage {
   caption?: string;
 }
 
+export interface PdfAppendixSection {
+  title: string;
+  /** Optional small italic caption under the section title. */
+  caption?: string;
+  table: PdfTable;
+}
+
+export interface PdfGlossaryEntry {
+  term: string;
+  definition: string;
+}
+
 export interface PdfDoc {
   meta: PdfMeta;
+  /** Optional summary table on the main page (kept short — high-level only). */
   table?: PdfTable;
   images?: PdfImage[];
+  /** Detailed deep-dive data; rendered on a new page (or pages) at the end. */
+  appendix?: PdfAppendixSection[];
+  /** Definitions for the parameters and column headers used in this doc. */
+  glossary?: PdfGlossaryEntry[];
 }
 
 const MARGIN = 14;
@@ -129,6 +146,73 @@ function drawImages(doc: jsPDF, startY: number, images: PdfImage[]): void {
   }
 }
 
+function drawAppendix(doc: jsPDF, sections: PdfAppendixSection[]): void {
+  doc.addPage();
+  let y = MARGIN + 4;
+  doc.setFont("helvetica", "bold");
+  doc.setFontSize(14);
+  doc.setTextColor(124, 45, 54);
+  doc.text("Appendix · Deep Dive", MARGIN, y);
+  y += 8;
+  doc.setDrawColor(220);
+  doc.setLineWidth(0.2);
+  doc.line(MARGIN, y - 2, PAGE_W - MARGIN, y - 2);
+
+  for (const section of sections) {
+    y = ensureSpace(doc, y, 18);
+    doc.setFont("helvetica", "bold");
+    doc.setFontSize(11);
+    doc.setTextColor(60);
+    doc.text(section.title, MARGIN, y);
+    y += 4;
+
+    if (section.caption) {
+      doc.setFont("helvetica", "italic");
+      doc.setFontSize(8);
+      doc.setTextColor(110);
+      const lines = doc.splitTextToSize(section.caption, PAGE_W - 2 * MARGIN);
+      doc.text(lines, MARGIN, y);
+      y += lines.length * 3.5 + 1;
+    }
+
+    y = drawTable(doc, y, section.table);
+    y += 4;
+  }
+}
+
+function drawGlossary(doc: jsPDF, entries: PdfGlossaryEntry[]): void {
+  doc.addPage();
+  let y = MARGIN + 4;
+  doc.setFont("helvetica", "bold");
+  doc.setFontSize(14);
+  doc.setTextColor(124, 45, 54);
+  doc.text("Key", MARGIN, y);
+  y += 4;
+  doc.setFont("helvetica", "italic");
+  doc.setFontSize(8);
+  doc.setTextColor(110);
+  doc.text("Glossary of parameters and column headers used in this report.", MARGIN, y + 3);
+  y += 8;
+  doc.setDrawColor(220);
+  doc.setLineWidth(0.2);
+  doc.line(MARGIN, y - 2, PAGE_W - MARGIN, y - 2);
+
+  for (const entry of entries) {
+    y = ensureSpace(doc, y, 12);
+    doc.setFont("helvetica", "bold");
+    doc.setFontSize(9);
+    doc.setTextColor(60);
+    doc.text(entry.term, MARGIN, y);
+
+    doc.setFont("helvetica", "normal");
+    doc.setFontSize(8);
+    doc.setTextColor(80);
+    const lines = doc.splitTextToSize(entry.definition, PAGE_W - 2 * MARGIN - 30);
+    doc.text(lines, MARGIN + 30, y);
+    y += Math.max(lines.length * 3.5, 5) + 1;
+  }
+}
+
 export function buildPdf(payload: PdfDoc): jsPDF {
   const doc = new jsPDF({ unit: "mm", format: "a4" });
   let y = drawHeader(doc, payload.meta);
@@ -140,6 +224,12 @@ export function buildPdf(payload: PdfDoc): jsPDF {
     doc.setTextColor(60);
     doc.text("Samples", MARGIN, y);
     drawImages(doc, y + 2, payload.images);
+  }
+  if (payload.appendix && payload.appendix.length > 0) {
+    drawAppendix(doc, payload.appendix);
+  }
+  if (payload.glossary && payload.glossary.length > 0) {
+    drawGlossary(doc, payload.glossary);
   }
   return doc;
 }

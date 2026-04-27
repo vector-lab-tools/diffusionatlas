@@ -13,6 +13,7 @@ import { ExportButtons } from "@/components/shared/ExportButtons";
 import { downloadCsv } from "@/lib/export/csv";
 import { downloadPdf } from "@/lib/export/pdf";
 import { downloadJson } from "@/lib/export/json";
+import { lookup as lookupTerm, termsFor } from "@/lib/docs/glossary";
 
 interface DiffuseResponse {
   images: string[];
@@ -286,8 +287,8 @@ export function LatentNeighbourhood() {
       </div>
 
       <div className="grid grid-cols-1 gap-3 mb-4">
-        <label className="block">
-          <span className="font-sans text-caption uppercase tracking-wider text-muted-foreground">Prompt</span>
+        <label className="block" title={lookupTerm("Prompt")}>
+          <span className="font-sans text-caption uppercase tracking-wider text-muted-foreground cursor-help underline decoration-dotted decoration-muted-foreground/40 underline-offset-4">Prompt</span>
           <input
             type="text"
             value={prompt}
@@ -296,8 +297,8 @@ export function LatentNeighbourhood() {
           />
         </label>
         <div className="grid grid-cols-4 gap-3">
-          <label className="block">
-            <span className="font-sans text-caption uppercase tracking-wider text-muted-foreground">Anchor seed</span>
+          <label className="block" title={lookupTerm("Anchor seed")}>
+            <span className="font-sans text-caption uppercase tracking-wider text-muted-foreground cursor-help underline decoration-dotted decoration-muted-foreground/40 underline-offset-4">Anchor seed</span>
             <input
               type="number"
               value={anchor}
@@ -305,8 +306,8 @@ export function LatentNeighbourhood() {
               className="input-editorial mt-1"
             />
           </label>
-          <label className="block">
-            <span className="font-sans text-caption uppercase tracking-wider text-muted-foreground">k samples</span>
+          <label className="block" title={lookupTerm("k samples")}>
+            <span className="font-sans text-caption uppercase tracking-wider text-muted-foreground cursor-help underline decoration-dotted decoration-muted-foreground/40 underline-offset-4">k samples</span>
             <input
               type="number"
               min={1}
@@ -316,8 +317,8 @@ export function LatentNeighbourhood() {
               className="input-editorial mt-1"
             />
           </label>
-          <label className="block">
-            <span className="font-sans text-caption uppercase tracking-wider text-muted-foreground">Radius</span>
+          <label className="block" title={lookupTerm("Radius")}>
+            <span className="font-sans text-caption uppercase tracking-wider text-muted-foreground cursor-help underline decoration-dotted decoration-muted-foreground/40 underline-offset-4">Radius</span>
             <input
               type="number"
               min={1}
@@ -326,8 +327,8 @@ export function LatentNeighbourhood() {
               className="input-editorial mt-1"
             />
           </label>
-          <label className="block">
-            <span className="font-sans text-caption uppercase tracking-wider text-muted-foreground">Steps</span>
+          <label className="block" title={lookupTerm("Steps")}>
+            <span className="font-sans text-caption uppercase tracking-wider text-muted-foreground cursor-help underline decoration-dotted decoration-muted-foreground/40 underline-offset-4">Steps</span>
             <input
               type="number"
               value={steps}
@@ -511,8 +512,15 @@ function NeighbourDeepDive({ prompt, anchor, k, radius, steps, primaryLabel, row
           { label: "Steps", value: steps },
         ],
       },
-      table: { headers: ["lane", ...headers], rows: tableRows },
       images,
+      appendix: [
+        {
+          title: "Per-seed results",
+          caption: "Each row in the neighbourhood: seed, role (anchor / neighbour), provider, model, response time. With Compare on, both lanes are interleaved.",
+          table: { headers: ["lane", ...headers], rows: tableRows },
+        },
+      ],
+      glossary: termsFor(["Prompt", "Anchor seed", "k samples", "Radius", "Steps", "lane", "seed", "role", "status", "provider", "model", "time", "error"]),
     });
   }
 

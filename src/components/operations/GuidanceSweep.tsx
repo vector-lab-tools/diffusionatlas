@@ -14,6 +14,7 @@ import { ExportButtons } from "@/components/shared/ExportButtons";
 import { downloadCsv } from "@/lib/export/csv";
 import { downloadPdf } from "@/lib/export/pdf";
 import { downloadJson } from "@/lib/export/json";
+import { lookup as lookupTerm, termsFor } from "@/lib/docs/glossary";
 
 interface DiffuseResponse {
   images: string[];
@@ -372,8 +373,8 @@ export function GuidanceSweep() {
       )}
 
       <div className="grid grid-cols-1 gap-3 mb-4">
-        <label className="block">
-          <span className="font-sans text-caption uppercase tracking-wider text-muted-foreground">Prompt</span>
+        <label className="block" title={lookupTerm("Prompt")}>
+          <span className="font-sans text-caption uppercase tracking-wider text-muted-foreground cursor-help underline decoration-dotted decoration-muted-foreground/40 underline-offset-4">Prompt</span>
           <input
             type="text"
             value={prompt}
@@ -382,8 +383,8 @@ export function GuidanceSweep() {
           />
         </label>
         <div className="grid grid-cols-3 gap-3">
-          <label className="block">
-            <span className="font-sans text-caption uppercase tracking-wider text-muted-foreground">Seed</span>
+          <label className="block" title={lookupTerm("Seed")}>
+            <span className="font-sans text-caption uppercase tracking-wider text-muted-foreground cursor-help underline decoration-dotted decoration-muted-foreground/40 underline-offset-4">Seed</span>
             <input
               type="number"
               value={seed}
@@ -391,8 +392,8 @@ export function GuidanceSweep() {
               className="input-editorial mt-1"
             />
           </label>
-          <label className="block">
-            <span className="font-sans text-caption uppercase tracking-wider text-muted-foreground">Steps</span>
+          <label className="block" title={lookupTerm("Steps")}>
+            <span className="font-sans text-caption uppercase tracking-wider text-muted-foreground cursor-help underline decoration-dotted decoration-muted-foreground/40 underline-offset-4">Steps</span>
             <input
               type="number"
               value={steps}
@@ -400,8 +401,8 @@ export function GuidanceSweep() {
               className="input-editorial mt-1"
             />
           </label>
-          <label className="block">
-            <span className="font-sans text-caption uppercase tracking-wider text-muted-foreground">CFG list</span>
+          <label className="block" title={lookupTerm("CFG list")}>
+            <span className="font-sans text-caption uppercase tracking-wider text-muted-foreground cursor-help underline decoration-dotted decoration-muted-foreground/40 underline-offset-4">CFG list</span>
             <input
               type="text"
               value={cfgList}
@@ -572,9 +573,9 @@ function SweepDeepDive({ prompt, seed, steps, primaryLabel, rowsA, driftA, compa
   }
 
   function exportPdf() {
-    const tableRows: Array<Array<string | number>> = [];
-    for (const row of laneRows(rowsA, driftA)) tableRows.push(["primary", ...row]);
-    if (compareEnabled) for (const row of laneRows(rowsB, driftB)) tableRows.push(["compare", ...row]);
+    const appendixRows: Array<Array<string | number>> = [];
+    for (const row of laneRows(rowsA, driftA)) appendixRows.push(["primary", ...row]);
+    if (compareEnabled) for (const row of laneRows(rowsB, driftB)) appendixRows.push(["compare", ...row]);
     const images = [
       ...rowsA.filter((r) => r.imageDataUrl).map((r) => ({
         dataUrl: r.imageDataUrl as string,
@@ -596,8 +597,15 @@ function SweepDeepDive({ prompt, seed, steps, primaryLabel, rowsA, driftA, compa
           { label: "Lanes", value: compareEnabled ? "2 (cross-backend)" : "1" },
         ],
       },
-      table: { headers: ["lane", ...headers], rows: tableRows },
       images,
+      appendix: [
+        {
+          title: "Per-cell results",
+          caption: "Full sweep output: status, provider, model, response time, and perceptual-hash drift from the CFG ≈ 7.5 baseline. With Compare on, both lanes are interleaved.",
+          table: { headers: ["lane", ...headers], rows: appendixRows },
+        },
+      ],
+      glossary: termsFor(["Prompt", "Seed", "Steps", "CFG list", "lane", "CFG", "status", "provider", "model", "time", "drift", "error"]),
     });
   }
 

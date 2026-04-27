@@ -14,6 +14,7 @@ import { ExportButtons } from "@/components/shared/ExportButtons";
 import { downloadCsv } from "@/lib/export/csv";
 import { downloadPdf } from "@/lib/export/pdf";
 import { downloadJson } from "@/lib/export/json";
+import { lookup as lookupTerm, termsFor } from "@/lib/docs/glossary";
 
 type ProjectionKind = "pca" | "umap";
 
@@ -42,7 +43,7 @@ function dataUrlToBlob(dataUrl: string): Blob {
 }
 
 export function DenoiseTrajectory() {
-  const { settings } = useSettings();
+  const { settings, setSettingsOpen } = useSettings();
   const { set: cacheImage } = useImageBlobCache();
 
   const [prompt, setPrompt] = useState("a cat sitting on a wooden chair, photorealistic");
@@ -220,7 +221,14 @@ export function DenoiseTrajectory() {
 
       {!isLocal && (
         <div className="border border-burgundy/40 bg-burgundy/5 text-burgundy p-3 mb-4 font-sans text-body-sm rounded-sm">
-          Local FastAPI backend required. Per-step latents are not exposed by hosted providers. Open Settings and switch Backend to <strong>Local FastAPI</strong>.
+          Local FastAPI backend required. Per-step latents are not exposed by hosted providers.{" "}
+          <button
+            onClick={() => setSettingsOpen(true)}
+            className="underline underline-offset-2 hover:text-burgundy-900 font-medium"
+          >
+            Open Settings →
+          </button>{" "}
+          and switch Backend to <strong>Local FastAPI</strong>.
         </div>
       )}
 
@@ -235,8 +243,8 @@ export function DenoiseTrajectory() {
           />
         </label>
         <div className="grid grid-cols-4 gap-3">
-          <label className="block">
-            <span className="font-sans text-caption uppercase tracking-wider text-muted-foreground">Seed</span>
+          <label className="block" title={lookupTerm("Seed")}>
+            <span className="font-sans text-caption uppercase tracking-wider text-muted-foreground cursor-help underline decoration-dotted decoration-muted-foreground/40 underline-offset-4">Seed</span>
             <input
               type="number"
               value={seed}
@@ -244,8 +252,8 @@ export function DenoiseTrajectory() {
               className="input-editorial mt-1"
             />
           </label>
-          <label className="block">
-            <span className="font-sans text-caption uppercase tracking-wider text-muted-foreground">Steps</span>
+          <label className="block" title={lookupTerm("Steps")}>
+            <span className="font-sans text-caption uppercase tracking-wider text-muted-foreground cursor-help underline decoration-dotted decoration-muted-foreground/40 underline-offset-4">Steps</span>
             <input
               type="number"
               min={2}
@@ -451,8 +459,15 @@ function TrajectoryDeepDive({ prompt, seed, steps, cfg, modelId, latents, previe
           ...(responseTimeMs !== null ? [{ label: "Total time", value: `${(responseTimeMs / 1000).toFixed(1)}s` }] : []),
         ],
       },
-      table: { headers, rows: tableRows },
       images,
+      appendix: [
+        {
+          title: "Per-step latent geometry",
+          caption: "Δ to prev is the L2 distance between successive latents (length of each denoising step). cos→final is the cosine similarity between each step's latent and the final latent (rises from ~0 to 1 as the trajectory converges).",
+          table: { headers, rows: tableRows },
+        },
+      ],
+      glossary: termsFor(["Prompt", "Seed", "Steps", "CFG", "Preview every", "step", "‖z‖", "Δ to prev", "cos→final", "preview"]),
     });
   }
 
