@@ -14,6 +14,7 @@ from fastapi.middleware.cors import CORSMiddleware
 
 from session import session_state
 from ops_generate import GenerateRequest, run as run_generate
+from ops_trajectory import TrajectoryRequest, stream as stream_trajectory
 
 app = FastAPI(title="Diffusion Atlas — Local Backend", version="0.2.0")
 
@@ -37,3 +38,8 @@ def health() -> dict:
 @app.post("/generate")
 def generate(req: GenerateRequest) -> dict:
     return run_generate(req, session_state)
+
+
+@app.post("/trajectory")
+def trajectory(req: TrajectoryRequest):
+    return stream_trajectory(req, session_state)

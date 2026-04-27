@@ -11,8 +11,8 @@
 
 **Author:** David M. Berry
 **Institution:** University of Sussex
-**Version:** 0.1.0
-**Date:** 26 April 2026
+**Version:** 0.2.1
+**Date:** 28 April 2026
 **Licence:** MIT
 
 Diffusion Atlas is a vector-native research tool for studying how diffusion models generate images geometrically. Where [Manifold Atlas](https://github.com/vector-lab-tools/manifold-atlas) reads the static manifold of a frozen embedding model, Diffusion Atlas reads the generative trajectory of a denoising model: the path through latent space that produces an image. It unifies an **Atlas** view (interpretability and geometry) with a **Bench** view (scored compositional evaluation) in a single instrument.
@@ -39,28 +39,32 @@ Diffusion Atlas distinguishes two analytical surfaces that most diffusion tools 
 
 The two views run on the same generated images. A finding in Bench (the model fails attribute binding for red-and-blue object pairs) can be cross-checked in Atlas (does the latent neighbourhood for that prompt show two distinct basins, or one collapsed mode?). This is the methodological reason for a single app rather than two.
 
-## Operations at a Glance (v0.1)
+## Operations at a Glance (v0.2)
 
 | Operation | View | Core question | Backend |
 |---|---|---|---|
-| Denoise Trajectory | Atlas | What path does the model take through latent space? | Local |
+| Denoise Trajectory | Atlas | What path does the model take through latent space? | **Local** (NDJSON stream) |
 | Guidance Sweep | Atlas | How does CFG bend the trajectory? Where does mode collapse? | Hosted or Local |
 | Latent Neighbourhood | Atlas | What does the local manifold look like around an anchor? | Hosted or Local |
 | Compositional Bench | Bench | How well does the model bind, count, and place? | Hosted or Local |
+| Library | — | What did we run, and what did it produce? | Local (IndexedDB) |
 
 ## Features
 
 ### Denoise Trajectory
-Trace the iterative denoising path through latent space. The local backend streams per-step latents over NDJSON; the client buffers them, reduces them via UMAP or PCA, and renders a 3D curve in Three.js with frame-stamped image previews along the path. Deep dive includes per-step L2 step size, cosine to final, scheduler sigma table, CSV and PDF export. Local backend required: hosted providers do not expose intermediate latents.
+Trace the iterative denoising path through latent space. The local backend streams per-step latents over NDJSON; the client buffers them, projects them to 3D via PCA, and renders the path in Three.js with start (gold) and end (burgundy) markers and an auto-rotating camera. Local backend required: hosted providers do not expose intermediate latents. Per-step preview thumbnails along the path, UMAP toggle, and CSV export are queued enhancements.
 
 ### Guidance Sweep
-Generate the same prompt and seed across a range of CFG values. The image grid is keyed by CFG; a Plotly line plot shows drift away from the CFG=7.5 baseline. Reveals the controllability surface and where mode collapse begins. Deep dive includes per-image metadata, drift table, and a mode-collapse indicator computed from variance across CFG.
+Generate the same prompt and seed across a list of CFG values (default `1, 2.5, 4, 7.5, 12`). The image grid is keyed by CFG with per-cell status while the run is in flight. The sweep is sequential rather than `Promise.all` parallel so a single failure doesn't tank the run, and rate-limited responses (Replicate's free tier triggers them quickly) are honoured: each cell shows a live `Retrying in Ns` countdown then resumes. A drift curve plotting perceptual-hash distance from the CFG=7.5 baseline is the next enhancement.
 
 ### Latent Neighbourhood
-Sample nearby points in latent space. With a hosted backend this means seed jitter around an anchor; with the local backend it means true Gaussian perturbation of the initial latent at a chosen sigma. The result is a UMAP scatter of the resulting image embeddings (or initial latents) plus a thumbnail grid. Deep dive: pairwise distances, DBSCAN cluster count, nearest and farthest pairs.
+Sample k images around an anchor seed at a configurable radius. Deterministic seed offsets so the run is reproducible. Hosted mode samples by varying the seed (each seed maps to a different starting latent); true Gaussian perturbation of the initial latent at a chosen sigma is queued for the local backend.
 
 ### Compositional Bench
-GenEval-style scored tasks: single object, two objects, counting, colour, position, colour-attribution. Aggregates to per-category accuracy with a leaderboard view and per-task gallery showing pass/fail overlays. Scoring runs locally via CLIP and lightweight detector heuristics. Deep dive: per-prompt scores, confusion examples, and CSV export with comparison to stored runs.
+GenEval-lite task pack: 4 categories (single object, two objects, counting, colour binding) × 3 prompts each = 12 tasks. Generate the pack at a fixed seed; mark each result pass or fail with the live per-category scoring panel. CLIP-based auto-scoring is queued — once the local backend exposes a `/score` endpoint the manual marking flips to optional override.
+
+### Library
+All saved runs across Sweep, Neighbourhood, Bench, and Trajectory, grouped by kind, newest first. Stored entirely in the browser's IndexedDB; nothing leaves the machine. Per-run delete and a Clear all action.
 
 ## Supported Diffusion Backends
 
@@ -208,18 +212,23 @@ The Atlas operations test specific claims of the framework. Denoise Trajectory m
 
 ## Roadmap
 
-- [x] App shell with Atlas / Bench / Library tabs
-- [x] Provider abstraction over hosted and local backends
-- [x] Settings panel with backend toggle, provider keys, cache stats
-- [ ] Denoise Trajectory with NDJSON streaming and 3D path renderer
-- [ ] Guidance Sweep with image grid and drift curve
-- [ ] Latent Neighbourhood with UMAP scatter
-- [ ] Compositional Bench (GenEval-lite) with leaderboard
-- [ ] Library browse for saved runs
+- [x] App shell with Atlas / Bench / Library tabs (v0.1.0)
+- [x] Vector Lab branding and theme-aware tool icon (v0.1.1)
+- [x] Provider abstraction with Replicate hosted provider (v0.1.2 – 0.1.7)
+- [x] Guidance Sweep with image grid and rate-limit retry (v0.1.8 – 0.1.9)
+- [x] Latent Neighbourhood with seed jitter (v0.1.10)
+- [x] Compositional Bench (GenEval-lite) with manual scoring (v0.1.11)
+- [x] Library browse for saved runs (v0.1.12)
+- [x] Local FastAPI backend skeleton with /generate (v0.2.0)
+- [x] **Denoise Trajectory** with NDJSON streaming and 3D PCA path (v0.2.1)
+- [ ] CLIP-based auto-scoring for Compositional Bench
+- [ ] Per-step preview thumbnails along the trajectory
+- [ ] Drift curve in Guidance Sweep (perceptual hash drift from baseline)
+- [ ] UMAP option for trajectory and neighbourhood
 - [ ] PDF export across operations
-- [ ] Cross-backend agreement view (Atlas finding from local, Bench finding from hosted, side by side)
-- [ ] Attention-map and cross-attention visualisation (v0.2+)
-- [ ] h-space steering (v0.2+)
+- [ ] Fal.ai / Together / Stability hosted providers
+- [ ] Attention-map and cross-attention visualisation
+- [ ] h-space steering
 
 ## Related Work
 

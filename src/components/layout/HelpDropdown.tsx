@@ -20,7 +20,12 @@ const HELP_SECTIONS: HelpSection[] = [
   },
   {
     title: "What is the Denoising Trajectory?",
-    content: "When a diffusion model generates an image it produces an ordered sequence of intermediate latents, one per denoising step. This sequence is the denoising trajectory. Reduced to three dimensions via UMAP or PCA, the trajectory becomes a curve through latent space. Curves that share start and end points but take different routes reveal something about how the model 'decides'. The trajectory is the analogue, for diffusion, of the token trajectory in autoregressive language models: a path through a learned manifold that ends in a specific output.",
+    content: "When a diffusion model generates an image it produces an ordered sequence of intermediate latents, one per denoising step. This sequence is the denoising trajectory. Reduced to three dimensions via PCA (UMAP coming), the trajectory becomes a curve through latent space. Curves that share start and end points but take different routes reveal something about how the model 'decides'. The trajectory is the analogue, for diffusion, of the token trajectory in autoregressive language models: a path through a learned manifold that ends in a specific output.",
+  },
+  {
+    title: "How the Trajectory operation works",
+    content: "Run a generation against the Local FastAPI backend. The diffusers callback fires once per denoising step; the backend captures each intermediate latent (typically 4×64×64 floats for SD 1.5 at 512×512), encodes it as base64 float32 bytes, and streams it on an NDJSON line. The client decodes each line as it arrives, accumulates the latents, and shows a step counter while the stream is open. When the final 'done' event lands (along with the final image), the client runs PCA in the browser to project the high-dimensional latents to three dimensions and renders the path in Three.js. Start and end of the trajectory are marked in gold and burgundy respectively; the camera auto-rotates and the user can orbit, pan, and zoom. The whole run is saved to the Library so the same trajectory can be revisited or compared with later runs.",
+    link: { label: "diffusers callback API", url: "https://huggingface.co/docs/diffusers/using-diffusers/callback" },
   },
   {
     title: "What is Classifier-Free Guidance?",
