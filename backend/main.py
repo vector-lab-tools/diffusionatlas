@@ -15,6 +15,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from session import session_state
 from ops_generate import GenerateRequest, run as run_generate
 from ops_trajectory import TrajectoryRequest, stream as stream_trajectory
+from ops_score import ScoreRequest, run as run_score
 
 app = FastAPI(title="Diffusion Atlas — Local Backend", version="0.2.0")
 
@@ -43,3 +44,8 @@ def generate(req: GenerateRequest) -> dict:
 @app.post("/trajectory")
 def trajectory(req: TrajectoryRequest):
     return stream_trajectory(req, session_state)
+
+
+@app.post("/score")
+def score(req: ScoreRequest) -> dict:
+    return run_score(req, session_state)

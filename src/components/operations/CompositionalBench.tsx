@@ -35,6 +35,7 @@ interface BenchRow {
   meta?: DiffusionResultMeta;
   errorMessage?: string;
   verdict: Verdict;
+  clipScore?: number;
 }
 
 function dataUrlToBlob(dataUrl: string): Blob {
@@ -56,6 +57,8 @@ export function CompositionalBench() {
     TASKS.map((task) => ({ task, status: "pending" as RowStatus, verdict: null })),
   );
   const [running, setRunning] = useState(false);
+  const [scoring, setScoring] = useState(false);
+  const [clipThreshold, setClipThreshold] = useState(0.25);
   const [topError, setTopError] = useState<string | null>(null);
   const [errorLink, setErrorLink] = useState<{ href: string; label: string } | null>(null);
 
@@ -192,6 +195,57 @@ export function CompositionalBench() {
     setRowAt(idx, { verdict });
   }
 
+  async function autoScore() {
+    const scorable = rows
+      .map((r, i) => ({ r, i }))
+      .filter(({ r }) => r.status === "ok" && r.imageDataUrl);
+
+    if (scorable.length === 0) {
+      setTopError("Run the bench first; auto-score needs generated images.");
+      return;
+    }
+    if (settings.backend !== "local") {
+      setTopError("Auto-score uses CLIP on the local backend. Open Settings and switch Backend to Local FastAPI.");
+      return;
+    }
+
+    setScoring(true);
+    setTopError(null);
+
+    try {
+      const res = await fetch(`${settings.localBaseUrl}/score`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          images: scorable.map(({ r }) => r.imageDataUrl),
+          prompts: scorable.map(({ r }) => r.task.prompt),
+        }),
+      });
+      if (!res.ok) {
+        const text = await res.text().catch(() => "");
+        setTopError(`Local backend ${res.status}: ${text.slice(0, 400)}`);
+        return;
+      }
+      const data: { scores: number[]; modelId: string } = await res.json();
+      setRows((prev) =>
+        prev.map((r) => {
+          const idx = scorable.findIndex((s) => s.i === prev.indexOf(r));
+          if (idx < 0) return r;
+          const score = data.scores[idx];
+          return {
+            ...r,
+            clipScore: score,
+            verdict: score >= clipThreshold ? "pass" : "fail",
+          };
+        }),
+      );
+    } catch (err) {
+      setTopError(`Cannot reach local backend at ${settings.localBaseUrl}. Is uvicorn running? (${err instanceof Error ? err.message : String(err)})`);
+    } finally {
+      setScoring(false);
+    }
+  }
+
   // Per-category and overall scores, computed live as user marks pass/fail.
   const scores = useMemo(() => {
     const byCat: Record<TaskCategoryId, { pass: number; fail: number; pending: number }> = {
@@ -221,7 +275,7 @@ export function CompositionalBench() {
       </p>
 
       <div className="border border-cream/80 bg-cream/30 text-foreground p-3 mb-4 font-sans text-caption rounded-sm">
-        Scoring is manual in v0.1 (you mark pass/fail per image). CLIP-based auto-scoring is queued for v0.2 once the local backend lands.
+        Mark pass/fail manually, or run <strong>Auto-score (CLIP)</strong> against the local backend to set verdicts from CLIP image-text similarity. The threshold is the cosine cutoff (0.25 is reasonable for `clip-vit-base-patch32`); you can override any verdict afterwards.
       </div>
 
       <div className="grid grid-cols-3 gap-3 mb-4">
@@ -249,7 +303,7 @@ export function CompositionalBench() {
         </div>
       </div>
 
-      <div className="flex items-center gap-3 mb-4">
+      <div className="flex items-center gap-3 mb-4 flex-wrap">
         <button
           onClick={() => void runBench()}
           disabled={running}
@@ -257,6 +311,26 @@ export function CompositionalBench() {
         >
           {running ? "Running bench…" : `Run bench (${TASKS.length} images)`}
         </button>
+        <button
+          onClick={() => void autoScore()}
+          disabled={running || scoring}
+          className={running || scoring ? "btn-editorial-secondary opacity-50" : "btn-editorial-secondary"}
+          title="Score every generated image against its prompt with CLIP (local backend required)"
+        >
+          {scoring ? "Scoring…" : "Auto-score (CLIP)"}
+        </button>
+        <label className="flex items-center gap-2 font-sans text-caption text-muted-foreground">
+          Threshold
+          <input
+            type="number"
+            step="0.01"
+            min={0}
+            max={1}
+            value={clipThreshold}
+            onChange={(e) => setClipThreshold(parseFloat(e.target.value) || 0)}
+            className="input-editorial w-20 py-1"
+          />
+        </label>
         <span className="font-sans text-caption text-muted-foreground">
           {settings.backend === "local" ? "Local" : "Hosted"} · {settings.providerId} · {settings.modelId}
         </span>
@@ -347,6 +421,14 @@ export function CompositionalBench() {
                 </div>
                 <div className="font-body text-body-sm text-foreground line-clamp-2">{row.task.prompt}</div>
                 <div className="font-sans text-caption text-muted-foreground italic line-clamp-2">{row.task.criterion}</div>
+                {row.clipScore !== undefined && (
+                  <div className="font-sans text-caption text-muted-foreground">
+                    CLIP score: <span className={row.clipScore >= clipThreshold ? "text-burgundy font-medium" : "text-foreground"}>
+                      {row.clipScore.toFixed(3)}
+                    </span>
+                    <span className="ml-1">({row.clipScore >= clipThreshold ? "≥" : "<"} {clipThreshold.toFixed(2)})</span>
+                  </div>
+                )}
                 <div className="flex gap-2 mt-auto">
                   <button
                     onClick={() => setVerdict(i, row.verdict === "pass" ? null : "pass")}
