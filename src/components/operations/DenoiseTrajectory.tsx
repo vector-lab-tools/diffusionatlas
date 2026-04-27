@@ -1,12 +1,15 @@
 "use client";
 
-import { useState } from "react";
+import { useEffect, useState } from "react";
+import { UMAP } from "umap-js";
 import { useSettings } from "@/context/DiffusionSettingsContext";
 import { useImageBlobCache } from "@/context/ImageBlobCacheContext";
 import { saveRun } from "@/lib/cache/runs";
 import { pca3D, type Point3 } from "@/lib/geometry/pca";
 import { TrajectoryThree } from "@/components/viz/TrajectoryThree";
 import type { Run, RunSampleRef } from "@/types/run";
+
+type ProjectionKind = "pca" | "umap";
 
 interface StartEvent { event: "start"; meta: Record<string, unknown> }
 interface StepEvent { event: "step"; step: number; totalSteps: number; shape: number[]; latentB64: string; previewDataUrl?: string }
@@ -42,6 +45,7 @@ export function DenoiseTrajectory() {
   const [cfg, setCfg] = useState(7.5);
 
   const [previewEvery, setPreviewEvery] = useState(4);
+  const [projection, setProjection] = useState<ProjectionKind>("pca");
 
   const [running, setRunning] = useState(false);
   const [progress, setProgress] = useState<{ done: number; total: number } | null>(null);
@@ -53,6 +57,28 @@ export function DenoiseTrajectory() {
   const [error, setError] = useState<string | null>(null);
 
   const isLocal = settings.backend === "local";
+
+  // Reproject when the user toggles PCA/UMAP. UMAP needs ≥4 samples; below
+  // that we silently fall back to PCA so the curve stays sensible.
+  useEffect(() => {
+    if (latents.length < 2) return;
+    if (projection === "pca" || latents.length < 4) {
+      setPoints(pca3D(latents));
+      return;
+    }
+    try {
+      const data = latents.map((l) => Array.from(l));
+      const umap = new UMAP({
+        nComponents: 3,
+        nNeighbors: Math.min(latents.length - 1, 5),
+        minDist: 0.1,
+      });
+      const projected = umap.fit(data) as number[][];
+      setPoints(projected.map((p) => [p[0], p[1], p[2]]));
+    } catch {
+      setPoints(pca3D(latents));
+    }
+  }, [projection, latents]);
 
   async function run() {
     if (!isLocal) {
@@ -142,7 +168,7 @@ export function DenoiseTrajectory() {
       return;
     }
 
-    // Project latents and render.
+    // Initial projection (PCA — UMAP toggle re-runs via useEffect).
     if (collected.length >= 2) {
       const projected = pca3D(collected);
       setPoints(projected);
@@ -265,15 +291,31 @@ export function DenoiseTrajectory() {
 
       {(running || latents.length > 0) && (
         <div className="border-t border-parchment pt-4">
-          <div className="flex items-center justify-between mb-2">
+          <div className="flex items-center justify-between mb-2 flex-wrap gap-2">
             <h3 className="font-sans text-caption uppercase tracking-wider text-muted-foreground">
               Trajectory · {latents.length} step{latents.length !== 1 ? "s" : ""} captured
             </h3>
-            {responseTimeMs !== null && (
-              <span className="font-sans text-caption text-muted-foreground">
-                {(responseTimeMs / 1000).toFixed(1)}s total
-              </span>
-            )}
+            <div className="flex items-center gap-2">
+              <span className="font-sans text-caption text-muted-foreground">Projection</span>
+              <button
+                onClick={() => setProjection("pca")}
+                className={projection === "pca" ? "btn-editorial-primary px-3 py-1 text-caption" : "btn-editorial-secondary px-3 py-1 text-caption"}
+              >
+                PCA
+              </button>
+              <button
+                onClick={() => setProjection("umap")}
+                className={projection === "umap" ? "btn-editorial-primary px-3 py-1 text-caption" : "btn-editorial-secondary px-3 py-1 text-caption"}
+                title={latents.length < 4 ? "UMAP needs ≥4 steps; falls back to PCA" : undefined}
+              >
+                UMAP
+              </button>
+              {responseTimeMs !== null && (
+                <span className="font-sans text-caption text-muted-foreground ml-2">
+                  {(responseTimeMs / 1000).toFixed(1)}s total
+                </span>
+              )}
+            </div>
           </div>
           {points.length >= 2 ? (
             <TrajectoryThree points={points} previews={previews} />

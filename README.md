@@ -11,7 +11,7 @@
 
 **Author:** David M. Berry
 **Institution:** University of Sussex
-**Version:** 0.2.3
+**Version:** 0.2.4
 **Date:** 28 April 2026
 **Licence:** MIT
 
@@ -74,12 +74,14 @@ Diffusion Atlas supports two classes of backend, selected per-session in Setting
 
 Hosted providers return final images via API. They are the right choice for Guidance Sweep, Latent Neighbourhood (seed-jitter mode), and Compositional Bench. They cannot serve Denoise Trajectory because they do not expose intermediate latents.
 
-| Provider | Notes | Sign up |
-|----------|-------|---------|
-| Replicate | Broad model selection (SDXL, SD3, FLUX, custom) | [replicate.com](https://replicate.com/) |
-| Fal | Low-latency inference, optimised serverless GPUs | [fal.ai](https://fal.ai/) |
-| Together | OpenAI-compatible inference, image and chat | [together.ai](https://www.together.ai/) |
-| Stability AI | Stability's own SD3, SDXL, and Stable Image series | [platform.stability.ai](https://platform.stability.ai/) |
+| Provider | Status | Notes | Sign up |
+|----------|--------|-------|---------|
+| Replicate | wired | Broad model selection (SDXL, SD3, FLUX, custom). Aggressive rate limits on the free tier. | [replicate.com](https://replicate.com/) |
+| Fal | wired | An order of magnitude more permissive on rate limits than Replicate. Best choice for sweep- and bench-heavy work. | [fal.ai](https://fal.ai/) |
+| Together | planned | OpenAI-compatible inference, image and chat | [together.ai](https://www.together.ai/) |
+| Stability AI | planned | Stability's own SD3, SDXL, and Stable Image series | [platform.stability.ai](https://platform.stability.ai/) |
+
+When you switch providers in Settings, the model id auto-updates to a sensible starting point for that provider (Replicate uses `owner/model` ids; Fal uses `fal-ai/<model>`). Override afterwards as needed.
 
 ### Local (full latent access)
 
@@ -223,7 +225,8 @@ The Atlas operations test specific claims of the framework. Denoise Trajectory m
 - [x] **Denoise Trajectory** with NDJSON streaming and 3D PCA path (v0.2.1)
 - [x] Per-step preview thumbnails along the trajectory + drift curve in Guidance Sweep (v0.2.2)
 - [x] CLIP-based auto-scoring for Compositional Bench (v0.2.3)
-- [ ] UMAP toggle on the trajectory projection
+- [x] Fal.ai hosted provider + UMAP toggle on the trajectory projection (v0.2.4)
+- [ ] Cross-backend agreement view (same operation, hosted vs local, side by side)
 - [ ] UMAP option for trajectory and neighbourhood
 - [ ] PDF export across operations
 - [ ] Fal.ai / Together / Stability hosted providers

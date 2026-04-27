@@ -8,6 +8,15 @@ import { useImageBlobCache } from "@/context/ImageBlobCacheContext";
 
 const HOSTED_PROVIDERS: ProviderId[] = ["replicate", "fal", "together", "stability"];
 
+/** Sensible starting-point model id per provider — different naming conventions. */
+const PROVIDER_DEFAULT_MODEL: Record<ProviderId, string> = {
+  replicate: "black-forest-labs/flux-schnell",
+  fal: "fal-ai/flux/schnell",
+  together: "black-forest-labs/FLUX.1-schnell-Free",
+  stability: "stable-diffusion-xl-1024-v1-0",
+  local: "runwayml/stable-diffusion-v1-5",
+};
+
 export function SettingsPanel() {
   const { settings, setSettings, settingsOpen, setSettingsOpen } = useSettings();
   const { count: latentCount, clear: clearLatents } = useLatentCache();
@@ -52,8 +61,17 @@ export function SettingsPanel() {
 
   if (!settingsOpen) return null;
 
-  const setBackend = (backend: Backend) => setSettings({ ...settings, backend, providerId: backend === "local" ? "local" : "replicate" });
-  const setProvider = (providerId: ProviderId) => setSettings({ ...settings, providerId });
+  const setBackend = (backend: Backend) => {
+    const providerId: ProviderId = backend === "local" ? "local" : "replicate";
+    setSettings({
+      ...settings,
+      backend,
+      providerId,
+      modelId: PROVIDER_DEFAULT_MODEL[providerId],
+    });
+  };
+  const setProvider = (providerId: ProviderId) =>
+    setSettings({ ...settings, providerId, modelId: PROVIDER_DEFAULT_MODEL[providerId] });
   const setApiKey = (provider: ProviderId, key: string) =>
     setSettings({ ...settings, apiKeys: { ...settings.apiKeys, [provider]: key } });
 
