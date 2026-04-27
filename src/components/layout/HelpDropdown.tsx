@@ -28,6 +28,14 @@ const HELP_SECTIONS: HelpSection[] = [
     link: { label: "diffusers callback API", url: "https://huggingface.co/docs/diffusers/using-diffusers/callback" },
   },
   {
+    title: "Per-step preview thumbnails",
+    content: "Since v0.2.2 the trajectory operation can decode intermediate latents through the VAE at chosen intervals. The Preview every field controls the cadence: every 4th step is a reasonable default for a 20-step run; set it to 0 to skip previews entirely (saves ~one VAE decode per emitted thumbnail). Each thumbnail floats above its step's marker as a billboard sprite, so you can see the image emerging from noise along the actual trajectory through latent space. The final step is always thumbnailed regardless of the cadence so the destination is visible. Decoding cost on Apple Silicon is roughly 0.5–1 second per thumbnail at 96 px; on CUDA, faster. The cost is in addition to denoising itself, so a trajectory with previewEvery=2 takes noticeably longer than one with previewEvery=8.",
+  },
+  {
+    title: "Drift curve in Guidance Sweep",
+    content: "When the sweep finishes, each image is hashed (16×16 grayscale aHash, 256 bits) entirely in the browser via Canvas. Hamming distance between any two hashes is divided by 256 to give a normalised drift score in [0, 1]. The baseline is the CFG value nearest 7.5 — the conventional 'sensible default' for SDXL/SD3 — so drift reads as 'how far does this CFG value pull the image away from the conventionally-correct version?'. Low CFG drifts because the image has wandered off the prompt; high CFG drifts because the image has collapsed into oversaturated mode-collapsed territory. The curve is the controllability surface, made literal. aHash is a coarse proxy for visual difference — for a more rigorous metric, a CLIP-based score endpoint is queued for the local backend.",
+  },
+  {
     title: "What is Classifier-Free Guidance?",
     link: { label: "Ho and Salimans (2022)", url: "https://arxiv.org/abs/2207.12598" },
     content: "Classifier-Free Guidance (CFG) is the lever that controls how strongly the model follows the text prompt. At CFG = 1 the model ignores the prompt entirely. At higher values it amplifies the difference between the prompt-conditioned and unconditioned predictions, pushing the trajectory more aggressively toward the prompt. Too low and the output drifts from the prompt; too high and the output collapses into oversaturated, mode-collapsed images. The Guidance Sweep operation traces this controllability surface and reveals where each model becomes brittle.",

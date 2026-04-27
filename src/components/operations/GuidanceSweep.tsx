@@ -1,11 +1,12 @@
 "use client";
 
-import { useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { useSettings } from "@/context/DiffusionSettingsContext";
 import { useImageBlobCache } from "@/context/ImageBlobCacheContext";
 import type { DiffusionRequest, DiffusionResultMeta } from "@/lib/providers/types";
 import { saveRun } from "@/lib/cache/runs";
 import type { Run, RunSampleRef } from "@/types/run";
+import { ahash, normalisedDrift, type Hash } from "@/lib/geometry/perceptual_hash";
 
 interface DiffuseResponse {
   images: string[];
@@ -25,6 +26,7 @@ interface SweepRow {
   imageDataUrl?: string;
   meta?: DiffusionResultMeta;
   errorMessage?: string;
+  hash?: Hash;
 }
 
 const DEFAULT_CFG_SET = "1, 2.5, 4, 7.5, 12";
@@ -50,6 +52,56 @@ function modelIgnoresCfg(modelId: string): boolean {
   return id.includes("schnell") || id.includes("flux-2");
 }
 
+function DriftCurve({ cfgs, drift }: { cfgs: number[]; drift: Array<number | null> }) {
+  const W = 480, H = 100, P = 22;
+  const xs = cfgs;
+  const minX = Math.min(...xs);
+  const maxX = Math.max(...xs);
+  const xScale = (x: number) => P + ((x - minX) / (maxX - minX || 1)) * (W - 2 * P);
+  const yScale = (y: number) => H - P - y * (H - 2 * P); // 0..1 → bottom..top
+
+  const points = cfgs
+    .map((cfg, i) => (drift[i] !== null ? `${xScale(cfg)},${yScale(drift[i] as number)}` : null))
+    .filter((p): p is string => p !== null);
+  const path = points.length >= 2 ? `M ${points.join(" L ")}` : "";
+
+  return (
+    <svg viewBox={`0 0 ${W} ${H}`} className="w-full max-w-2xl">
+      {/* Axes */}
+      <line x1={P} y1={H - P} x2={W - P} y2={H - P} stroke="hsl(var(--parchment-dark))" strokeWidth={1} />
+      <line x1={P} y1={P} x2={P} y2={H - P} stroke="hsl(var(--parchment-dark))" strokeWidth={1} />
+      <text x={P} y={H - 4} fontSize={9} fill="hsl(var(--muted-foreground))" fontFamily="sans-serif">
+        CFG {minX}
+      </text>
+      <text x={W - P - 16} y={H - 4} fontSize={9} fill="hsl(var(--muted-foreground))" fontFamily="sans-serif">
+        {maxX}
+      </text>
+      <text x={2} y={P + 4} fontSize={9} fill="hsl(var(--muted-foreground))" fontFamily="sans-serif">1</text>
+      <text x={2} y={H - P} fontSize={9} fill="hsl(var(--muted-foreground))" fontFamily="sans-serif">0</text>
+      {/* Path */}
+      {path && <path d={path} fill="none" stroke="hsl(var(--burgundy))" strokeWidth={1.5} />}
+      {/* Points */}
+      {cfgs.map((cfg, i) =>
+        drift[i] !== null ? (
+          <g key={i}>
+            <circle cx={xScale(cfg)} cy={yScale(drift[i] as number)} r={3} fill="hsl(var(--burgundy))" />
+            <text
+              x={xScale(cfg)}
+              y={yScale(drift[i] as number) - 6}
+              fontSize={9}
+              textAnchor="middle"
+              fill="hsl(var(--foreground))"
+              fontFamily="sans-serif"
+            >
+              {(drift[i] as number).toFixed(2)}
+            </text>
+          </g>
+        ) : null,
+      )}
+    </svg>
+  );
+}
+
 export function GuidanceSweep() {
   const { settings } = useSettings();
   const { set: cacheImage } = useImageBlobCache();
@@ -65,6 +117,36 @@ export function GuidanceSweep() {
 
   const cfgs = parseCfgList(cfgList);
   const cfgWarning = modelIgnoresCfg(settings.modelId);
+
+  // Hash any new ok rows so drift can be plotted. Runs once per row arrival.
+  useEffect(() => {
+    let cancelled = false;
+    void (async () => {
+      for (let i = 0; i < rows.length; i++) {
+        const row = rows[i];
+        if (row.status === "ok" && row.imageDataUrl && !row.hash) {
+          try {
+            const h = await ahash(row.imageDataUrl);
+            if (cancelled) return;
+            setRows((prev) => prev.map((r, j) => (j === i ? { ...r, hash: h } : r)));
+          } catch {
+            /* ignore — drift won't show for this row */
+          }
+        }
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [rows]);
+
+  // Pick a baseline: CFG nearest to 7.5. Drift from baseline for each row.
+  const drift = useMemo(() => {
+    const ok = rows.filter((r) => r.status === "ok" && r.hash);
+    if (ok.length < 2) return null;
+    const baseline = ok.reduce((best, r) => (Math.abs(r.cfg - 7.5) < Math.abs(best.cfg - 7.5) ? r : best));
+    return rows.map((r) => (r.status === "ok" && r.hash ? normalisedDrift(baseline.hash!, r.hash) : null));
+  }, [rows]);
 
   async function callOnce(cfg: number): Promise<{ ok: boolean; data?: DiffuseResponse; err?: GenError; status?: number }> {
     const request: DiffusionRequest = {
@@ -289,6 +371,15 @@ export function GuidanceSweep() {
               </a>
             </>
           )}
+        </div>
+      )}
+
+      {rows.length > 0 && drift && drift.some((d) => d !== null) && (
+        <div className="border-t border-parchment pt-4 mb-3">
+          <h3 className="font-sans text-caption uppercase tracking-wider text-muted-foreground mb-2">
+            Drift from CFG ≈ 7.5 baseline (perceptual hash distance)
+          </h3>
+          <DriftCurve cfgs={rows.map((r) => r.cfg)} drift={drift} />
         </div>
       )}
 

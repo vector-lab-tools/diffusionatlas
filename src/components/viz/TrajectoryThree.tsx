@@ -13,6 +13,20 @@ interface TrajectoryThreeProps {
   height?: number;
 }
 
+function PreviewBillboard({ position, dataUrl }: { position: Point3; dataUrl: string }) {
+  const texture = useMemo(() => {
+    const loader = new THREE.TextureLoader();
+    return loader.load(dataUrl);
+  }, [dataUrl]);
+  // Slight lift above the step marker so it doesn't sit on top of the path.
+  const lifted: Point3 = [position[0], position[1] + 0.18, position[2]];
+  return (
+    <sprite position={lifted} scale={[0.3, 0.3, 0.3]}>
+      <spriteMaterial attach="material" map={texture} transparent />
+    </sprite>
+  );
+}
+
 /**
  * Normalise points to a unit cube around origin so the camera framing is
  * stable regardless of latent magnitude (which varies wildly across models).
@@ -78,7 +92,7 @@ function AutoRotate() {
   return null;
 }
 
-export function TrajectoryThree({ points, height = 480 }: TrajectoryThreeProps) {
+export function TrajectoryThree({ points, previews, height = 480 }: TrajectoryThreeProps) {
   const norm = useMemo(() => normalise(points), [points]);
 
   return (
@@ -90,6 +104,11 @@ export function TrajectoryThree({ points, height = 480 }: TrajectoryThreeProps) 
         <gridHelper args={[4, 8, "#d6d6d6", "#ececec"]} position={[0, -1.2, 0]} />
         <Path points={norm} />
         <StepMarkers points={norm} />
+        {previews?.map((url, i) =>
+          url && i < norm.length ? (
+            <PreviewBillboard key={i} position={norm[i]} dataUrl={url} />
+          ) : null,
+        )}
         {norm.length > 0 && (
           <Html position={norm[0]} distanceFactor={6}>
             <div className="px-1 py-0.5 bg-card border border-gold rounded-sm text-[10px] font-sans text-foreground whitespace-nowrap">

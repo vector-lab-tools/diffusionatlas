@@ -9,7 +9,7 @@ import { TrajectoryThree } from "@/components/viz/TrajectoryThree";
 import type { Run, RunSampleRef } from "@/types/run";
 
 interface StartEvent { event: "start"; meta: Record<string, unknown> }
-interface StepEvent { event: "step"; step: number; totalSteps: number; shape: number[]; latentB64: string }
+interface StepEvent { event: "step"; step: number; totalSteps: number; shape: number[]; latentB64: string; previewDataUrl?: string }
 interface DoneEvent { event: "done"; imageDataUrl: string; responseTimeMs: number }
 interface ErrorEvent { event: "error"; message: string }
 
@@ -41,9 +41,12 @@ export function DenoiseTrajectory() {
   const [steps, setSteps] = useState(20);
   const [cfg, setCfg] = useState(7.5);
 
+  const [previewEvery, setPreviewEvery] = useState(4);
+
   const [running, setRunning] = useState(false);
   const [progress, setProgress] = useState<{ done: number; total: number } | null>(null);
   const [latents, setLatents] = useState<Float32Array[]>([]);
+  const [previews, setPreviews] = useState<Array<string | null>>([]);
   const [points, setPoints] = useState<Point3[]>([]);
   const [finalImage, setFinalImage] = useState<string | null>(null);
   const [responseTimeMs, setResponseTimeMs] = useState<number | null>(null);
@@ -61,6 +64,7 @@ export function DenoiseTrajectory() {
     setError(null);
     setProgress(null);
     setLatents([]);
+    setPreviews([]);
     setPoints([]);
     setFinalImage(null);
     setResponseTimeMs(null);
@@ -78,6 +82,7 @@ export function DenoiseTrajectory() {
           cfg,
           width: settings.defaults.width,
           height: settings.defaults.height,
+          previewEvery,
         }),
       });
     } catch (err) {
@@ -97,6 +102,7 @@ export function DenoiseTrajectory() {
     const decoder = new TextDecoder();
     let buffer = "";
     const collected: Float32Array[] = [];
+    const collectedPreviews: Array<string | null> = [];
     let finalUrl: string | null = null;
     let respMs: number | null = null;
     let streamErr: string | null = null;
@@ -114,8 +120,10 @@ export function DenoiseTrajectory() {
           try { event = JSON.parse(line) as StreamEvent; } catch { continue; }
           if (event.event === "step") {
             collected.push(decodeLatent(event.latentB64));
+            collectedPreviews.push(event.previewDataUrl ?? null);
             setProgress({ done: event.step, total: event.totalSteps });
             setLatents([...collected]);
+            setPreviews([...collectedPreviews]);
           } else if (event.event === "done") {
             finalUrl = event.imageDataUrl;
             respMs = event.responseTimeMs;
@@ -191,7 +199,7 @@ export function DenoiseTrajectory() {
             className="input-editorial mt-1"
           />
         </label>
-        <div className="grid grid-cols-3 gap-3">
+        <div className="grid grid-cols-4 gap-3">
           <label className="block">
             <span className="font-sans text-caption uppercase tracking-wider text-muted-foreground">Seed</span>
             <input
@@ -219,6 +227,17 @@ export function DenoiseTrajectory() {
               step="0.5"
               value={cfg}
               onChange={(e) => setCfg(parseFloat(e.target.value) || 0)}
+              className="input-editorial mt-1"
+            />
+          </label>
+          <label className="block" title="Decode a thumbnail every N steps. 0 disables previews. Each thumbnail adds one VAE decode.">
+            <span className="font-sans text-caption uppercase tracking-wider text-muted-foreground">Preview every</span>
+            <input
+              type="number"
+              min={0}
+              max={50}
+              value={previewEvery}
+              onChange={(e) => setPreviewEvery(parseInt(e.target.value, 10) || 0)}
               className="input-editorial mt-1"
             />
           </label>
@@ -257,7 +276,7 @@ export function DenoiseTrajectory() {
             )}
           </div>
           {points.length >= 2 ? (
-            <TrajectoryThree points={points} />
+            <TrajectoryThree points={points} previews={previews} />
           ) : (
             <div className="border border-parchment bg-cream/30 p-8 text-center font-sans text-body-sm text-muted-foreground rounded-sm">
               {running ? "Receiving latents… 3D render appears once the stream completes." : "Need at least 2 steps to render a trajectory."}

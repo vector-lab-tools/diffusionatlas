@@ -39,6 +39,11 @@ class TrajectoryRequest(BaseModel):
     width: int = Field(512, ge=64, le=2048)
     height: int = Field(512, ge=64, le=2048)
 
+    previewEvery: int = Field(4, ge=0, le=50)
+    """Decode and emit a thumbnail every N steps. 0 disables previews."""
+    previewSize: int = Field(96, ge=32, le=256)
+    """Thumbnail edge length in pixels."""
+
 
 _DONE = object()
 
@@ -46,6 +51,29 @@ _DONE = object()
 def _encode_latent(t: torch.Tensor) -> str:
     arr = t.detach().to(dtype=torch.float32, device="cpu").numpy().astype(np.float32)
     return base64.b64encode(arr.tobytes()).decode("ascii")
+
+
+def _decode_latent_to_thumbnail(pipe, latent: torch.Tensor, size: int) -> str | None:
+    """VAE-decode an intermediate latent and return a small PNG data URL.
+
+    Cost is roughly one VAE decode (~100ms-1s on MPS for SD1.5 at 512); we
+    only call this every Nth step to keep total trajectory time reasonable.
+    """
+    try:
+        with torch.no_grad():
+            scaled = latent.detach().to(dtype=pipe.vae.dtype) / pipe.vae.config.scaling_factor
+            decoded = pipe.vae.decode(scaled, return_dict=False)[0]
+        # decoded: (B, C, H, W) in [-1, 1]
+        img = (decoded[0].clamp(-1, 1) + 1) / 2
+        img = (img * 255).to(dtype=torch.uint8).permute(1, 2, 0).cpu().numpy()
+        from PIL import Image
+        pil = Image.fromarray(img)
+        pil.thumbnail((size, size))
+        buf = BytesIO()
+        pil.save(buf, format="PNG", optimize=True)
+        return "data:image/png;base64," + base64.b64encode(buf.getvalue()).decode("ascii")
+    except Exception:
+        return None
 
 
 def stream(req: TrajectoryRequest, session_state) -> StreamingResponse:
@@ -64,13 +92,24 @@ def stream(req: TrajectoryRequest, session_state) -> StreamingResponse:
         if latent is None:
             return kwargs
         try:
-            q.put({
+            step_idx = int(step) + 1
+            payload: dict[str, Any] = {
                 "event": "step",
-                "step": int(step) + 1,
+                "step": step_idx,
                 "totalSteps": int(req.steps),
                 "shape": list(latent.shape),
                 "latentB64": _encode_latent(latent),
-            })
+            }
+            # Decode a thumbnail every N steps. Always include the final step.
+            should_preview = (
+                req.previewEvery > 0
+                and (step_idx % req.previewEvery == 0 or step_idx == req.steps)
+            )
+            if should_preview:
+                thumb = _decode_latent_to_thumbnail(pipe_, latent, req.previewSize)
+                if thumb is not None:
+                    payload["previewDataUrl"] = thumb
+            q.put(payload)
         except Exception as e:
             q.put({"event": "error", "message": f"Encoding step {step} failed: {e}"})
         return kwargs
