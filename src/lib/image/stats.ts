@@ -41,6 +41,13 @@ export interface ImageStats {
   centreY: number;
   highFreqRatio: number;
   pngBytes: number;
+  /** 32-bin histograms per channel + luma. Each entry is the count in that bin. */
+  histR: number[];
+  histG: number[];
+  histB: number[];
+  histLuma: number[];
+  /** Mean hue, in degrees [0, 360). Cultural-analytics indicator a la Manovich. */
+  meanHue: number;
 }
 
 const cache = new Map<string, ImageStats>();
@@ -107,9 +114,17 @@ export async function computeImageStats(src: string): Promise<ImageStats> {
   const { data } = ctx.getImageData(0, 0, W, H);
   const N = W * H;
 
-  // Mean RGB, mean luma, mean chroma (saturation proxy)
+  // Mean RGB, mean luma, mean chroma (saturation proxy), per-channel histograms,
+  // mean hue. One pass, accumulating everything we need for the stats panel.
   let sumR = 0, sumG = 0, sumB = 0, sumLuma = 0, sumLuma2 = 0, sumChroma = 0;
   const histogram = new Uint32Array(256);
+  // 32-bin coarse histograms for compact display.
+  const hR = new Array(32).fill(0);
+  const hG = new Array(32).fill(0);
+  const hB = new Array(32).fill(0);
+  const hL = new Array(32).fill(0);
+  // Sum hue as a unit vector to handle the 0/360 wrap-around correctly.
+  let hueX = 0, hueY = 0, hueW = 0;
   let cmX = 0, cmY = 0, cmW = 0;
   for (let y = 0; y < H; y++) {
     for (let x = 0; x < W; x++) {
@@ -118,18 +133,42 @@ export async function computeImageStats(src: string): Promise<ImageStats> {
       const g = data[i + 1];
       const b = data[i + 2];
       const luma = 0.299 * r + 0.587 * g + 0.114 * b;
+      const max = Math.max(r, g, b);
+      const min = Math.min(r, g, b);
+      const chroma = max - min;
       sumR += r;
       sumG += g;
       sumB += b;
       sumLuma += luma;
       sumLuma2 += luma * luma;
-      sumChroma += Math.max(r, g, b) - Math.min(r, g, b);
+      sumChroma += chroma;
       histogram[Math.round(luma) | 0]++;
+      hR[(r >> 3) & 0x1f]++;
+      hG[(g >> 3) & 0x1f]++;
+      hB[(b >> 3) & 0x1f]++;
+      hL[(Math.round(luma) >> 3) & 0x1f]++;
+      // Hue (degrees) — only meaningful when there's some chroma.
+      if (chroma > 0) {
+        let hue = 0;
+        if (max === r) hue = ((g - b) / chroma) % 6;
+        else if (max === g) hue = (b - r) / chroma + 2;
+        else hue = (r - g) / chroma + 4;
+        hue *= 60;
+        if (hue < 0) hue += 360;
+        const rad = (hue * Math.PI) / 180;
+        // Weight by chroma so achromatic pixels don't drag the mean.
+        hueX += Math.cos(rad) * chroma;
+        hueY += Math.sin(rad) * chroma;
+        hueW += chroma;
+      }
       cmX += x * luma;
       cmY += y * luma;
       cmW += luma;
     }
   }
+  const meanHueRad = hueW > 0 ? Math.atan2(hueY / hueW, hueX / hueW) : 0;
+  let meanHue = (meanHueRad * 180) / Math.PI;
+  if (meanHue < 0) meanHue += 360;
   const meanR = sumR / N;
   const meanG = sumG / N;
   const meanB = sumB / N;
@@ -203,6 +242,11 @@ export async function computeImageStats(src: string): Promise<ImageStats> {
     centreY,
     highFreqRatio,
     pngBytes,
+    histR: hR,
+    histG: hG,
+    histB: hB,
+    histLuma: hL,
+    meanHue,
   };
   cache.set(src, stats);
   return stats;

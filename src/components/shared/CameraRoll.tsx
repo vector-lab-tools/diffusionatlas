@@ -94,7 +94,7 @@ function FrameModal({ entry, onClose, onPrev, onNext, index, total }: FrameModal
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center bg-ink/60 p-4" onClick={onClose}>
       <div
-        className="card-editorial max-w-4xl w-full max-h-[90vh] overflow-y-auto p-4"
+        className="card-editorial max-w-3xl w-full max-h-[90vh] overflow-y-auto p-4"
         onClick={(e) => e.stopPropagation()}
       >
         <div className="flex items-start justify-between mb-3">
@@ -114,10 +114,10 @@ function FrameModal({ entry, onClose, onPrev, onNext, index, total }: FrameModal
           </button>
         </div>
 
-        <div className="grid grid-cols-1 sm:grid-cols-[1fr_220px] gap-4">
-          <div className="bg-cream/40 border border-parchment rounded-sm overflow-hidden">
+        <div className="grid grid-cols-1 sm:grid-cols-[280px_1fr] gap-4">
+          <div className="bg-cream/40 border border-parchment rounded-sm overflow-hidden flex items-center justify-center" style={{ maxHeight: "320px" }}>
             {/* eslint-disable-next-line @next/next/no-img-element */}
-            <img src={entry.src} alt={entry.caption ?? "frame"} className="w-full h-auto" />
+            <img src={entry.src} alt={entry.caption ?? "frame"} className="w-full h-auto object-contain" style={{ maxHeight: "320px" }} />
           </div>
 
           <div className="space-y-4">
@@ -203,8 +203,7 @@ function ImageStatsPanel({ src }: { src: string }) {
     );
   }
 
-  // Each row: { label, value, hint } — hint shown as a hover title.
-  const rows: Array<{ label: string; value: string; hint: string }> = [
+  const rows: Array<{ label: string; value: ReactNode; hint: string }> = [
     {
       label: "Dimensions",
       value: `${stats.width} × ${stats.height}`,
@@ -212,8 +211,29 @@ function ImageStatsPanel({ src }: { src: string }) {
     },
     {
       label: "Mean RGB",
-      value: `${stats.meanR.toFixed(0)} · ${stats.meanG.toFixed(0)} · ${stats.meanB.toFixed(0)}`,
-      hint: "Per-channel mean intensity (0-255). Drift across denoising steps reveals the model's colour bias.",
+      value: (
+        <span className="flex items-center gap-2">
+          <span
+            className="inline-block w-3 h-3 rounded-sm border border-parchment-dark/30"
+            style={{ background: `rgb(${Math.round(stats.meanR)}, ${Math.round(stats.meanG)}, ${Math.round(stats.meanB)})` }}
+          />
+          {stats.meanR.toFixed(0)} · {stats.meanG.toFixed(0)} · {stats.meanB.toFixed(0)}
+        </span>
+      ),
+      hint: "Per-channel mean intensity (0-255). The swatch shows the actual mean colour. Drift across denoising steps reveals colour bias.",
+    },
+    {
+      label: "Hue",
+      value: (
+        <span className="flex items-center gap-2">
+          <span
+            className="inline-block w-3 h-3 rounded-sm border border-parchment-dark/30"
+            style={{ background: `hsl(${stats.meanHue.toFixed(0)}, 80%, 50%)` }}
+          />
+          {stats.meanHue.toFixed(0)}°
+        </span>
+      ),
+      hint: "Chroma-weighted mean hue in degrees, computed as a circular mean to handle the 0/360 wrap. Manovich's cultural-analytics work uses hue distributions to fingerprint visual style.",
     },
     {
       label: "Brightness",
@@ -258,10 +278,13 @@ function ImageStatsPanel({ src }: { src: string }) {
   ];
 
   return (
-    <div className="border-t border-parchment pt-3">
-      <h4 className="font-sans text-caption uppercase tracking-wider text-muted-foreground mb-2">
+    <div className="border-t border-parchment pt-3 space-y-3">
+      <h4 className="font-sans text-caption uppercase tracking-wider text-muted-foreground">
         Image stats
       </h4>
+
+      <Histograms stats={stats} />
+
       <dl className="grid grid-cols-[100px_1fr] gap-y-1 font-sans text-caption">
         {rows.map((r) => (
           <div key={r.label} className="contents">
@@ -275,6 +298,52 @@ function ImageStatsPanel({ src }: { src: string }) {
           </div>
         ))}
       </dl>
+    </div>
+  );
+}
+
+/** Compact 32-bin histograms — three RGB channels and one luma — rendered as
+ * inline SVGs. Diffusion-trajectory-relevant: their shape moves from flat
+ * (noise) to peaky (structure) as denoising progresses. */
+function Histograms({ stats }: { stats: ImageStats }) {
+  const W = 240;
+  const H = 36;
+
+  function bars(values: number[], colour: string, label: string, hint: string) {
+    const max = Math.max(1, ...values);
+    const barW = W / values.length;
+    return (
+      <div title={hint} className="cursor-help">
+        <div className="flex items-center gap-2 font-sans text-[10px] text-muted-foreground mb-0.5">
+          <span className="inline-block w-2 h-2 rounded-sm" style={{ background: colour }} />
+          <span>{label}</span>
+        </div>
+        <svg viewBox={`0 0 ${W} ${H}`} width={W} height={H} className="block">
+          {values.map((v, i) => {
+            const h = (v / max) * H;
+            return (
+              <rect
+                key={i}
+                x={i * barW}
+                y={H - h}
+                width={Math.max(1, barW - 0.5)}
+                height={h}
+                fill={colour}
+                opacity={0.85}
+              />
+            );
+          })}
+        </svg>
+      </div>
+    );
+  }
+
+  return (
+    <div className="grid grid-cols-2 gap-3">
+      {bars(stats.histR, "#cd2650", "R", "Red-channel histogram (32 bins). A flat distribution → noise; peaks → committed colour structure.")}
+      {bars(stats.histG, "#3b7d4f", "G", "Green-channel histogram (32 bins).")}
+      {bars(stats.histB, "#2e5d8a", "B", "Blue-channel histogram (32 bins).")}
+      {bars(stats.histLuma, "#444", "Luma", "Luminance histogram. The shape moves from flat (noise) to a Gaussian-ish peak as denoising progresses; bimodal shapes suggest distinct light/dark regions in the image.")}
     </div>
   );
 }

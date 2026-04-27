@@ -638,71 +638,62 @@ export function DenoiseTrajectory() {
         </div>
       )}
 
-      {latents.length > 0 && (
-        <TrajectoryDeepDive
-          prompt={prompt}
-          seed={seed}
-          steps={steps}
-          cfg={cfg}
-          modelId={settings.modelId}
-          latents={latents}
-          previews={previews}
-          stepStats={stepStats}
-          points={points}
-          finalImage={finalImage}
-          responseTimeMs={responseTimeMs}
-        />
+      {visibleLayers.length > 0 && (
+        <TrajectoryDeepDive layers={visibleLayers} />
       )}
     </div>
   );
 }
 
 interface TrajectoryDeepDiveProps {
-  prompt: string;
-  seed: number;
-  steps: number;
-  cfg: number;
-  modelId: string;
-  latents: Float32Array[];
-  previews: Array<string | null>;
-  stepStats: Array<Omit<StepEvent, "event" | "shape" | "latentB64" | "previewDataUrl">>;
-  points: Point3[];
-  finalImage: string | null;
-  responseTimeMs: number | null;
+  layers: TrajectoryLayer[];
 }
 
-function TrajectoryDeepDive({ prompt, seed, steps, cfg, modelId, latents, previews, stepStats, points, finalImage, responseTimeMs }: TrajectoryDeepDiveProps) {
-  function l2(a: Float32Array, b: Float32Array): number {
-    let s = 0;
-    const n = Math.min(a.length, b.length);
-    for (let i = 0; i < n; i++) {
-      const d = a[i] - b[i];
-      s += d * d;
-    }
-    return Math.sqrt(s);
+function l2(a: Float32Array, b: Float32Array): number {
+  let s = 0;
+  const n = Math.min(a.length, b.length);
+  for (let i = 0; i < n; i++) {
+    const d = a[i] - b[i];
+    s += d * d;
   }
-  function cosine(a: Float32Array, b: Float32Array): number {
-    let dot = 0, na = 0, nb = 0;
-    const n = Math.min(a.length, b.length);
-    for (let i = 0; i < n; i++) {
-      dot += a[i] * b[i];
-      na += a[i] * a[i];
-      nb += b[i] * b[i];
-    }
-    const d = Math.sqrt(na) * Math.sqrt(nb);
-    return d === 0 ? 0 : dot / d;
-  }
+  return Math.sqrt(s);
+}
 
-  const final = latents[latents.length - 1];
-  // Per-step rows include both client-side derived fields (step size, cosine
-  // to final / start) and the server-side scalars (timestep, sigma, mean,
-  // std) so a researcher gets one comprehensive table.
-  const richRows = latents.map((l, i) => {
+function cosine(a: Float32Array, b: Float32Array): number {
+  let dot = 0, na = 0, nb = 0;
+  const n = Math.min(a.length, b.length);
+  for (let i = 0; i < n; i++) {
+    dot += a[i] * b[i];
+    na += a[i] * a[i];
+    nb += b[i] * b[i];
+  }
+  const d = Math.sqrt(na) * Math.sqrt(nb);
+  return d === 0 ? 0 : dot / d;
+}
+
+interface RichStepRow {
+  step: number;
+  norm: number;
+  stepSize: number | null;
+  cosToFinal: number;
+  cosToStart: number;
+  timestep: number | null | undefined;
+  sigma: number | null | undefined;
+  latentMean: number | undefined;
+  latentStd: number | undefined;
+  latentMin: number | undefined;
+  latentMax: number | undefined;
+  preview: string | null;
+}
+
+function buildRichRows(layer: TrajectoryLayer): RichStepRow[] {
+  const final = layer.latents[layer.latents.length - 1];
+  return layer.latents.map((l, i) => {
     const norm = Math.sqrt(l.reduce((a, x) => a + x * x, 0));
-    const stepSize = i > 0 ? l2(l, latents[i - 1]) : 0;
+    const stepSize = i > 0 ? l2(l, layer.latents[i - 1]) : 0;
     const cosToFinal = cosine(l, final);
-    const cosToStart = cosine(l, latents[0]);
-    const stat = stepStats[i] ?? {};
+    const cosToStart = cosine(l, layer.latents[0]);
+    const stat = layer.stepStats[i] ?? {};
     return {
       step: i + 1,
       norm,
@@ -715,11 +706,13 @@ function TrajectoryDeepDive({ prompt, seed, steps, cfg, modelId, latents, previe
       latentStd: stat.latentStd,
       latentMin: stat.latentMin,
       latentMax: stat.latentMax,
-      preview: previews[i] ?? null,
+      preview: layer.previews[i] ?? null,
     };
   });
+}
 
-  const tableRows: Array<Array<string | number>> = richRows.map((r) => [
+function rowsToTableArray(rows: RichStepRow[]): Array<Array<string | number>> {
+  return rows.map((r) => [
     r.step,
     r.timestep != null ? r.timestep.toFixed(1) : "—",
     r.sigma != null ? r.sigma.toFixed(3) : "—",
@@ -731,67 +724,25 @@ function TrajectoryDeepDive({ prompt, seed, steps, cfg, modelId, latents, previe
     r.latentStd != null ? r.latentStd.toFixed(3) : "—",
     r.preview ? "yes" : "—",
   ]);
+}
 
-  const headers = ["step", "timestep", "sigma", "‖z‖", "Δ to prev", "cos→final", "cos→start", "mean", "std", "preview"];
+const TRAJ_HEADERS = ["step", "timestep", "sigma", "‖z‖", "Δ to prev", "cos→final", "cos→start", "mean", "std", "preview"];
 
-  const stamp = `traj-${seed}-${Date.now()}`;
-  function exportCsv() { downloadCsv(`${stamp}.csv`, headers, tableRows); }
-  function exportJson() {
-    downloadJson(`${stamp}.json`, {
-      operation: "denoise-trajectory",
-      modelId, prompt, seed, steps, cfg,
-      latentDim: latents[0]?.length ?? 0,
-      stepCount: latents.length,
-      points,
-      perStep: tableRows.map((r) => ({ step: r[0], norm: parseFloat(String(r[1])), deltaToPrev: r[2] === "—" ? null : parseFloat(String(r[2])), cosToFinal: parseFloat(String(r[3])), hasPreview: r[4] === "yes" })),
-      responseTimeMs,
-    });
-  }
-  function exportPdf() {
-    const images: Array<{ dataUrl: string; caption?: string }> = [];
-    previews.forEach((p, i) => {
-      if (p) images.push({ dataUrl: p, caption: `step ${i + 1}` });
-    });
-    if (finalImage) images.push({ dataUrl: finalImage, caption: "final" });
-    downloadPdf(`${stamp}.pdf`, {
-      meta: {
-        title: "Denoise Trajectory",
-        subtitle: `local · ${modelId}`,
-        fields: [
-          { label: "Prompt", value: prompt },
-          { label: "Seed", value: seed },
-          { label: "Steps", value: steps },
-          { label: "CFG", value: cfg },
-          { label: "Latent dim", value: latents[0]?.length ?? 0 },
-          ...(responseTimeMs !== null ? [{ label: "Total time", value: `${(responseTimeMs / 1000).toFixed(1)}s` }] : []),
-        ],
-      },
-      images,
-      appendix: [
-        {
-          title: "Per-step latent geometry",
-          caption: "Δ to prev is the L2 distance between successive latents (length of each denoising step). cos→final is the cosine similarity between each step's latent and the final latent (rises from ~0 to 1 as the trajectory converges).",
-          table: { headers, rows: tableRows },
-        },
-      ],
-      glossary: termsFor(["Prompt", "Seed", "Steps", "CFG", "Preview every", "step", "‖z‖", "Δ to prev", "cos→final", "preview"]),
-    });
-  }
-
-  // Camera roll: each preview thumbnail + the final image, with rich
-  // per-step metadata attached so clicking a frame opens the full detail.
-  const cameraEntries: Array<{
-    src: string;
-    caption?: string;
-    subcaption?: string;
-    details?: Array<{ label: string; value: string | number }>;
-  }> = [];
-  previews.forEach((url, i) => {
+function buildCameraEntries(layer: TrajectoryLayer): Array<{
+  src: string;
+  caption?: string;
+  subcaption?: string;
+  details?: Array<{ label: string; value: string | number }>;
+}> {
+  const out: ReturnType<typeof buildCameraEntries> = [];
+  layer.previews.forEach((url, i) => {
     if (!url) return;
-    const stat = stepStats[i] ?? {};
+    const stat = layer.stepStats[i] ?? {};
     const details: Array<{ label: string; value: string | number }> = [
+      { label: "Layer", value: layer.label },
       { label: "Step", value: i + 1 },
-      { label: "CFG", value: cfg },
+      { label: "CFG", value: layer.cfg },
+      { label: "Seed", value: layer.seed },
     ];
     if (stat.timestep != null) details.push({ label: "Timestep", value: stat.timestep.toFixed(2) });
     if (stat.sigma != null) details.push({ label: "Sigma", value: stat.sigma.toFixed(4) });
@@ -800,42 +751,142 @@ function TrajectoryDeepDive({ prompt, seed, steps, cfg, modelId, latents, previe
     if (stat.latentStd != null) details.push({ label: "Std", value: stat.latentStd.toFixed(4) });
     if (stat.latentMin != null) details.push({ label: "Min", value: stat.latentMin.toFixed(4) });
     if (stat.latentMax != null) details.push({ label: "Max", value: stat.latentMax.toFixed(4) });
-    cameraEntries.push({
+    out.push({
       src: url,
       caption: `step ${i + 1}`,
-      subcaption: "preview · click for stats",
+      subcaption: `${layer.label} · click for stats`,
       details,
     });
   });
-  if (finalImage) {
-    cameraEntries.push({
-      src: finalImage,
+  if (layer.finalImage) {
+    out.push({
+      src: layer.finalImage,
       caption: "final",
-      subcaption: `${steps} steps`,
+      subcaption: `${layer.label} · ${layer.steps} steps`,
       details: [
-        { label: "Prompt", value: prompt },
-        { label: "Seed", value: seed },
-        { label: "Steps", value: steps },
-        { label: "CFG", value: cfg },
-        { label: "Model", value: modelId },
-        ...(responseTimeMs !== null ? [{ label: "Time", value: `${(responseTimeMs / 1000).toFixed(1)}s` }] : []),
+        { label: "Layer", value: layer.label },
+        { label: "Prompt", value: layer.prompt },
+        { label: "Seed", value: layer.seed },
+        { label: "Steps", value: layer.steps },
+        { label: "CFG", value: layer.cfg },
+        { label: "Model", value: layer.modelId },
+        ...(layer.responseTimeMs !== null ? [{ label: "Time", value: `${(layer.responseTimeMs / 1000).toFixed(1)}s` }] : []),
       ],
+    });
+  }
+  return out;
+}
+
+function TrajectoryDeepDive({ layers }: TrajectoryDeepDiveProps) {
+  // Aggregate everything for cross-layer exports.
+  const stamp = `traj-${Date.now()}`;
+
+  function exportCsv() {
+    const headers = ["layer", ...TRAJ_HEADERS];
+    const rows: Array<Array<string | number>> = [];
+    for (const layer of layers) {
+      for (const r of rowsToTableArray(buildRichRows(layer))) {
+        rows.push([layer.label, ...r]);
+      }
+    }
+    downloadCsv(`${stamp}.csv`, headers, rows);
+  }
+
+  function exportJson() {
+    downloadJson(`${stamp}.json`, {
+      operation: "denoise-trajectory",
+      layers: layers.map((layer) => ({
+        id: layer.id,
+        label: layer.label,
+        modelId: layer.modelId,
+        prompt: layer.prompt,
+        seed: layer.seed,
+        steps: layer.steps,
+        cfg: layer.cfg,
+        latentDim: layer.latents[0]?.length ?? 0,
+        stepCount: layer.latents.length,
+        responseTimeMs: layer.responseTimeMs,
+        perStep: rowsToTableArray(buildRichRows(layer)),
+      })),
+    });
+  }
+
+  function exportPdf() {
+    const images: Array<{ dataUrl: string; caption?: string }> = [];
+    for (const layer of layers) {
+      layer.previews.forEach((p, i) => {
+        if (p) images.push({ dataUrl: p, caption: `${layer.label} · step ${i + 1}` });
+      });
+      if (layer.finalImage) images.push({ dataUrl: layer.finalImage, caption: `${layer.label} · final` });
+    }
+
+    const appendix = layers.map((layer) => ({
+      title: `Per-step latent geometry · ${layer.label}`,
+      caption: `Prompt: ${layer.prompt} · seed ${layer.seed} · ${layer.steps} steps · CFG ${layer.cfg} · model ${layer.modelId}`,
+      table: { headers: TRAJ_HEADERS, rows: rowsToTableArray(buildRichRows(layer)) },
+    }));
+
+    const headLayer = layers[0];
+    downloadPdf(`${stamp}.pdf`, {
+      meta: {
+        title: "Denoise Trajectory",
+        subtitle: layers.length === 1
+          ? `local · ${headLayer.modelId}`
+          : `${layers.length} layers compared`,
+        fields:
+          layers.length === 1
+            ? [
+                { label: "Prompt", value: headLayer.prompt },
+                { label: "Seed", value: headLayer.seed },
+                { label: "Steps", value: headLayer.steps },
+                { label: "CFG", value: headLayer.cfg },
+                { label: "Latent dim", value: headLayer.latents[0]?.length ?? 0 },
+                ...(headLayer.responseTimeMs !== null
+                  ? [{ label: "Total time", value: `${(headLayer.responseTimeMs / 1000).toFixed(1)}s` }]
+                  : []),
+              ]
+            : [
+                { label: "Layers", value: layers.length },
+                ...layers.map((l, i) => ({ label: `Layer ${i + 1}`, value: `${l.label} (${l.latents.length} steps)` })),
+              ],
+      },
+      images,
+      appendix,
+      glossary: termsFor(["Prompt", "Seed", "Steps", "CFG", "Preview every", "step", "‖z‖", "Δ to prev", "cos→final", "cos→start", "preview"]),
     });
   }
 
   return (
     <DeepDive actions={<ExportButtons onCsv={exportCsv} onPdf={exportPdf} onJson={exportJson} />}>
-      <div className="space-y-6">
-        {cameraEntries.length > 0 && <CameraRoll entries={cameraEntries} title="Camera roll · denoising progression" />}
-        <div>
-          <Table
-            headers={headers}
-            rows={tableRows}
-            numericColumns={[0, 1, 2, 3, 4, 5, 6, 7, 8]}
-            caption="Per-step latent geometry. Click any step row below for richer inspection (preview thumbnail, full distribution stats)."
-          />
-        </div>
-        <StepInspector richRows={richRows} cfg={cfg} />
+      <div className="space-y-8">
+        {layers.map((layer) => {
+          const richRows = buildRichRows(layer);
+          const tableRows = rowsToTableArray(richRows);
+          const cameraEntries = buildCameraEntries(layer);
+          return (
+            <section key={layer.id} className="space-y-4">
+              <header className="flex items-center gap-3 border-b border-parchment pb-2">
+                <span className="inline-block w-3 h-3 rounded-full flex-shrink-0" style={{ background: layer.colour }} />
+                <h3 className="font-display text-display-md font-bold text-burgundy">{layer.label}</h3>
+                <span className="font-sans text-caption text-muted-foreground ml-auto">
+                  {layer.latents.length} steps · seed {layer.seed} · {layer.steps} req · CFG {layer.cfg} · {layer.modelId.split("/").pop()}
+                </span>
+              </header>
+              {cameraEntries.length > 0 && (
+                <CameraRoll entries={cameraEntries} title="Camera roll · denoising progression" />
+              )}
+              <div>
+                <Table
+                  headers={TRAJ_HEADERS}
+                  rows={tableRows}
+                  numericColumns={[0, 1, 2, 3, 4, 5, 6, 7, 8]}
+                  caption="Per-step latent geometry. The inspector below lets you expand any step for the preview thumbnail and full distribution stats."
+                />
+              </div>
+              <StepInspector richRows={richRows} cfg={layer.cfg} />
+            </section>
+          );
+        })}
       </div>
     </DeepDive>
   );
