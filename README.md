@@ -11,7 +11,7 @@
 
 **Author:** David M. Berry
 **Institution:** University of Sussex
-**Version:** 0.3.1
+**Version:** 0.3.2
 **Date:** 28 April 2026
 **Licence:** MIT
 
@@ -232,7 +232,8 @@ The Atlas operations test specific claims of the framework. Denoise Trajectory m
 - [x] Fal.ai hosted provider + UMAP toggle on the trajectory projection (v0.2.4)
 - [x] Cross-backend agreement view in Guidance Sweep (v0.3.0) — same prompt + seed, two providers in parallel, side-by-side grids and drift curves
 - [x] Cross-backend comparison extended to Latent Neighbourhood (v0.3.1)
-- [ ] Cross-backend comparison extended to Compositional Bench
+- [x] Cross-backend comparison extended to Compositional Bench + Deep Dive panels with CSV/PDF/JSON export across all operations (v0.3.2)
+- [ ] Clippy / Hackerman easter eggs with diffusion-flavoured quips
 - [ ] Object-detection-based bench scoring (proper GenEval rather than CLIP cosine)
 - [ ] UMAP option for trajectory and neighbourhood
 - [ ] PDF export across operations

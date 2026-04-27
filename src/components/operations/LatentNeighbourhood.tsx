@@ -7,6 +7,12 @@ import type { DiffusionRequest, DiffusionResultMeta, ProviderId } from "@/lib/pr
 import { saveRun } from "@/lib/cache/runs";
 import type { Run, RunSampleRef } from "@/types/run";
 import { ALL_PROVIDERS, PROVIDER_DEFAULT_MODEL, providerLabel } from "@/lib/providers/defaults";
+import { DeepDive } from "@/components/shared/DeepDive";
+import { Table } from "@/components/shared/Table";
+import { ExportButtons } from "@/components/shared/ExportButtons";
+import { downloadCsv } from "@/lib/export/csv";
+import { downloadPdf } from "@/lib/export/pdf";
+import { downloadJson } from "@/lib/export/json";
 
 interface DiffuseResponse {
   images: string[];
@@ -268,8 +274,11 @@ export function LatentNeighbourhood() {
   return (
     <div className="card-editorial p-6 max-w-5xl">
       <h2 className="font-display text-display-md font-bold text-burgundy mb-2">Latent Neighbourhood</h2>
-      <p className="font-body text-body-sm text-foreground mb-4">
+      <p className="font-body text-body-sm text-foreground mb-1">
         Sample nearby points by jittering the seed around an anchor. Reveals the local manifold structure: smoothness, basins, and where small perturbations produce categorical jumps in the output.
+      </p>
+      <p className="font-sans text-caption italic text-muted-foreground mb-4">
+        Read the grid as: nearby seeds that look similar mean a smooth basin; sudden categorical jumps (a cat becomes a dog) mean a basin boundary. Small radius probes local geometry; large radius probes how connected the manifold is. With Compare on, two providers' neighbourhoods around the same anchor reveal where their geometries agree on what "near" means.
       </p>
 
       <div className="border border-cream/80 bg-cream/30 text-foreground p-3 mb-4 font-sans text-caption rounded-sm">
@@ -419,7 +428,98 @@ export function LatentNeighbourhood() {
           rows={rowsB}
         />
       )}
+
+      {(rows.length > 0 || rowsB.length > 0) && (
+        <NeighbourDeepDive
+          prompt={prompt}
+          anchor={anchor}
+          k={k}
+          radius={radius}
+          steps={steps}
+          primaryLabel={`${providerLabel(settings.providerId)} · ${settings.modelId}`}
+          rowsA={rows}
+          compareEnabled={compareEnabled}
+          compareLabel={`${providerLabel(compareProviderId)} · ${compareModelId}`}
+          rowsB={rowsB}
+        />
+      )}
     </div>
+  );
+}
+
+interface NeighbourDeepDiveProps {
+  prompt: string;
+  anchor: number;
+  k: number;
+  radius: number;
+  steps: number;
+  primaryLabel: string;
+  rowsA: NeighbourRow[];
+  compareEnabled: boolean;
+  compareLabel: string;
+  rowsB: NeighbourRow[];
+}
+
+function NeighbourDeepDive({ prompt, anchor, k, radius, steps, primaryLabel, rowsA, compareEnabled, compareLabel, rowsB }: NeighbourDeepDiveProps) {
+  function laneRows(rows: NeighbourRow[]) {
+    return rows.map((r, i) => [
+      r.seed,
+      i === 0 ? "anchor" : "neighbour",
+      r.status,
+      r.meta?.providerId ?? "—",
+      r.meta?.modelId ?? "—",
+      r.meta ? (r.meta.responseTimeMs / 1000).toFixed(2) + "s" : "—",
+      r.errorMessage ?? "",
+    ]);
+  }
+  const headers = ["seed", "role", "status", "provider", "model", "time", "error"];
+  const tableRows: Array<Array<string | number>> = [
+    ...laneRows(rowsA).map((r) => ["primary", ...r]),
+    ...(compareEnabled ? laneRows(rowsB).map((r) => ["compare", ...r]) : []),
+  ];
+
+  const stamp = `nbr-${anchor}-${Date.now()}`;
+  function exportCsv() { downloadCsv(`${stamp}.csv`, ["lane", ...headers], tableRows); }
+  function exportJson() {
+    downloadJson(`${stamp}.json`, {
+      operation: "latent-neighbourhood",
+      prompt, anchor, k, radius, steps,
+      primary: { label: primaryLabel, rows: rowsA },
+      compare: compareEnabled ? { label: compareLabel, rows: rowsB } : null,
+    });
+  }
+  function exportPdf() {
+    const images = [
+      ...rowsA.filter((r) => r.imageDataUrl).map((r, i) => ({
+        dataUrl: r.imageDataUrl as string,
+        caption: `primary · seed ${r.seed}${i === 0 ? " (anchor)" : ""}`,
+      })),
+      ...(compareEnabled ? rowsB.filter((r) => r.imageDataUrl).map((r, i) => ({
+        dataUrl: r.imageDataUrl as string,
+        caption: `compare · seed ${r.seed}${i === 0 ? " (anchor)" : ""}`,
+      })) : []),
+    ];
+    downloadPdf(`${stamp}.pdf`, {
+      meta: {
+        title: "Latent Neighbourhood",
+        subtitle: compareEnabled ? `${primaryLabel}  ↔  ${compareLabel}` : primaryLabel,
+        fields: [
+          { label: "Prompt", value: prompt },
+          { label: "Anchor seed", value: anchor },
+          { label: "k samples", value: k },
+          { label: "Radius", value: radius },
+          { label: "Steps", value: steps },
+        ],
+      },
+      table: { headers: ["lane", ...headers], rows: tableRows },
+      images,
+    });
+  }
+
+  return (
+    <DeepDive actions={<ExportButtons onCsv={exportCsv} onPdf={exportPdf} onJson={exportJson} />}>
+      <Table headers={["lane", ...headers]} rows={tableRows} numericColumns={[1, 5]} />
+    </DeepDive>
   );
 }
 

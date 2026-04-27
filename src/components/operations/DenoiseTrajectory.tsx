@@ -8,6 +8,12 @@ import { saveRun } from "@/lib/cache/runs";
 import { pca3D, type Point3 } from "@/lib/geometry/pca";
 import { TrajectoryThree } from "@/components/viz/TrajectoryThree";
 import type { Run, RunSampleRef } from "@/types/run";
+import { DeepDive } from "@/components/shared/DeepDive";
+import { Table } from "@/components/shared/Table";
+import { ExportButtons } from "@/components/shared/ExportButtons";
+import { downloadCsv } from "@/lib/export/csv";
+import { downloadPdf } from "@/lib/export/pdf";
+import { downloadJson } from "@/lib/export/json";
 
 type ProjectionKind = "pca" | "umap";
 
@@ -205,8 +211,11 @@ export function DenoiseTrajectory() {
   return (
     <div className="card-editorial p-6 max-w-5xl">
       <h2 className="font-display text-display-md font-bold text-burgundy mb-2">Denoise Trajectory</h2>
-      <p className="font-body text-body-sm text-foreground mb-4">
-        Trace the iterative denoising path through latent space. The local backend streams per-step latents; the client projects them to 3D via PCA and renders the curve in Three.js with the start (gold) and end (burgundy) marked.
+      <p className="font-body text-body-sm text-foreground mb-1">
+        Trace the iterative denoising path through latent space. The local backend streams per-step latents; the client projects them to 3D via PCA (or UMAP) and renders the curve in Three.js with the start (gold) and end (burgundy) marked.
+      </p>
+      <p className="font-sans text-caption italic text-muted-foreground mb-4">
+        Read the curve as: gold marker is pure noise; burgundy is the final image. Bends in the curve are where the denoising made a "decision" about composition. Thumbnails along the path show the image emerging from noise — the gap between an early-step blur and the final image is where most of the generative work happens.
       </p>
 
       {!isLocal && (
@@ -340,6 +349,116 @@ export function DenoiseTrajectory() {
           )}
         </div>
       )}
+
+      {latents.length > 0 && (
+        <TrajectoryDeepDive
+          prompt={prompt}
+          seed={seed}
+          steps={steps}
+          cfg={cfg}
+          modelId={settings.modelId}
+          latents={latents}
+          previews={previews}
+          points={points}
+          finalImage={finalImage}
+          responseTimeMs={responseTimeMs}
+        />
+      )}
     </div>
+  );
+}
+
+interface TrajectoryDeepDiveProps {
+  prompt: string;
+  seed: number;
+  steps: number;
+  cfg: number;
+  modelId: string;
+  latents: Float32Array[];
+  previews: Array<string | null>;
+  points: Point3[];
+  finalImage: string | null;
+  responseTimeMs: number | null;
+}
+
+function TrajectoryDeepDive({ prompt, seed, steps, cfg, modelId, latents, previews, points, finalImage, responseTimeMs }: TrajectoryDeepDiveProps) {
+  function l2(a: Float32Array, b: Float32Array): number {
+    let s = 0;
+    const n = Math.min(a.length, b.length);
+    for (let i = 0; i < n; i++) {
+      const d = a[i] - b[i];
+      s += d * d;
+    }
+    return Math.sqrt(s);
+  }
+  function cosine(a: Float32Array, b: Float32Array): number {
+    let dot = 0, na = 0, nb = 0;
+    const n = Math.min(a.length, b.length);
+    for (let i = 0; i < n; i++) {
+      dot += a[i] * b[i];
+      na += a[i] * a[i];
+      nb += b[i] * b[i];
+    }
+    const d = Math.sqrt(na) * Math.sqrt(nb);
+    return d === 0 ? 0 : dot / d;
+  }
+
+  const final = latents[latents.length - 1];
+  const tableRows: Array<Array<string | number>> = latents.map((l, i) => {
+    const norm = Math.sqrt(l.reduce((a, x) => a + x * x, 0));
+    const stepSize = i > 0 ? l2(l, latents[i - 1]) : 0;
+    const cosToFinal = cosine(l, final);
+    return [
+      i + 1,
+      norm.toFixed(3),
+      i > 0 ? stepSize.toFixed(3) : "—",
+      cosToFinal.toFixed(3),
+      previews[i] ? "yes" : "—",
+    ];
+  });
+
+  const headers = ["step", "‖z‖", "Δ to prev", "cos→final", "preview"];
+
+  const stamp = `traj-${seed}-${Date.now()}`;
+  function exportCsv() { downloadCsv(`${stamp}.csv`, headers, tableRows); }
+  function exportJson() {
+    downloadJson(`${stamp}.json`, {
+      operation: "denoise-trajectory",
+      modelId, prompt, seed, steps, cfg,
+      latentDim: latents[0]?.length ?? 0,
+      stepCount: latents.length,
+      points,
+      perStep: tableRows.map((r) => ({ step: r[0], norm: parseFloat(String(r[1])), deltaToPrev: r[2] === "—" ? null : parseFloat(String(r[2])), cosToFinal: parseFloat(String(r[3])), hasPreview: r[4] === "yes" })),
+      responseTimeMs,
+    });
+  }
+  function exportPdf() {
+    const images: Array<{ dataUrl: string; caption?: string }> = [];
+    previews.forEach((p, i) => {
+      if (p) images.push({ dataUrl: p, caption: `step ${i + 1}` });
+    });
+    if (finalImage) images.push({ dataUrl: finalImage, caption: "final" });
+    downloadPdf(`${stamp}.pdf`, {
+      meta: {
+        title: "Denoise Trajectory",
+        subtitle: `local · ${modelId}`,
+        fields: [
+          { label: "Prompt", value: prompt },
+          { label: "Seed", value: seed },
+          { label: "Steps", value: steps },
+          { label: "CFG", value: cfg },
+          { label: "Latent dim", value: latents[0]?.length ?? 0 },
+          ...(responseTimeMs !== null ? [{ label: "Total time", value: `${(responseTimeMs / 1000).toFixed(1)}s` }] : []),
+        ],
+      },
+      table: { headers, rows: tableRows },
+      images,
+    });
+  }
+
+  return (
+    <DeepDive actions={<ExportButtons onCsv={exportCsv} onPdf={exportPdf} onJson={exportJson} />}>
+      <Table headers={headers} rows={tableRows} numericColumns={[0, 1, 2, 3]} caption="Per-step latent geometry. Δ to prev is the L2 step length; cos→final shows how directionally similar each step is to the final latent (rises from ~0 to 1 as denoising progresses)." />
+    </DeepDive>
   );
 }

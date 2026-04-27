@@ -8,6 +8,12 @@ import { saveRun } from "@/lib/cache/runs";
 import type { Run, RunSampleRef } from "@/types/run";
 import { ahash, normalisedDrift, type Hash } from "@/lib/geometry/perceptual_hash";
 import { ALL_PROVIDERS, PROVIDER_DEFAULT_MODEL, providerLabel } from "@/lib/providers/defaults";
+import { DeepDive } from "@/components/shared/DeepDive";
+import { Table } from "@/components/shared/Table";
+import { ExportButtons } from "@/components/shared/ExportButtons";
+import { downloadCsv } from "@/lib/export/csv";
+import { downloadPdf } from "@/lib/export/pdf";
+import { downloadJson } from "@/lib/export/json";
 
 interface DiffuseResponse {
   images: string[];
@@ -351,8 +357,11 @@ export function GuidanceSweep() {
   return (
     <div className="card-editorial p-6 max-w-4xl">
       <h2 className="font-display text-display-md font-bold text-burgundy mb-2">Guidance Sweep</h2>
-      <p className="font-body text-body-sm text-foreground mb-4">
+      <p className="font-body text-body-sm text-foreground mb-1">
         Same prompt and seed across a range of CFG values. Reveals the controllability surface and where mode collapse begins.
+      </p>
+      <p className="font-sans text-caption italic text-muted-foreground mb-4">
+        Read the drift curve as: low CFG → image drifts off prompt; high CFG → oversaturated mode collapse. The valley around CFG ≈ 7.5 is where guidance is most stable. With Compare on, two providers' valleys side by side show whether that "stable zone" is structural to the regime or specific to one model.
       </p>
 
       {cfgWarning && (
@@ -497,7 +506,112 @@ export function GuidanceSweep() {
           drift={driftB}
         />
       )}
+
+      {(rows.length > 0 || rowsB.length > 0) && (
+        <SweepDeepDive
+          prompt={prompt}
+          seed={seed}
+          steps={steps}
+          primaryLabel={`${providerLabel(settings.providerId)} · ${settings.modelId}`}
+          rowsA={rows}
+          driftA={drift}
+          compareEnabled={compareEnabled}
+          compareLabel={`${providerLabel(compareProviderId)} · ${compareModelId}`}
+          rowsB={rowsB}
+          driftB={driftB}
+        />
+      )}
     </div>
+  );
+}
+
+interface SweepDeepDiveProps {
+  prompt: string;
+  seed: number;
+  steps: number;
+  primaryLabel: string;
+  rowsA: SweepRow[];
+  driftA: Array<number | null> | null;
+  compareEnabled: boolean;
+  compareLabel: string;
+  rowsB: SweepRow[];
+  driftB: Array<number | null> | null;
+}
+
+function SweepDeepDive({ prompt, seed, steps, primaryLabel, rowsA, driftA, compareEnabled, compareLabel, rowsB, driftB }: SweepDeepDiveProps) {
+  function laneRows(rows: SweepRow[], drift: Array<number | null> | null) {
+    return rows.map((r, i) => [
+      r.cfg,
+      r.status,
+      r.meta?.providerId ?? "—",
+      r.meta?.modelId ?? "—",
+      r.meta?.seed ?? "—",
+      r.meta ? (r.meta.responseTimeMs / 1000).toFixed(2) + "s" : "—",
+      drift?.[i] != null ? (drift[i] as number).toFixed(3) : "—",
+      r.errorMessage ?? "",
+    ]);
+  }
+
+  const headers = ["CFG", "status", "provider", "model", "seed", "time", "drift", "error"];
+
+  const csvRows: Array<Array<string | number>> = [];
+  for (const row of laneRows(rowsA, driftA)) csvRows.push(["primary", ...row]);
+  if (compareEnabled) for (const row of laneRows(rowsB, driftB)) csvRows.push(["compare", ...row]);
+
+  function exportCsv() {
+    downloadCsv(`guidance-sweep-${seed}-${Date.now()}.csv`, ["lane", ...headers], csvRows);
+  }
+
+  function exportJson() {
+    downloadJson(`guidance-sweep-${seed}-${Date.now()}.json`, {
+      operation: "guidance-sweep",
+      prompt, seed, steps,
+      primary: { label: primaryLabel, rows: rowsA, drift: driftA },
+      compare: compareEnabled ? { label: compareLabel, rows: rowsB, drift: driftB } : null,
+    });
+  }
+
+  function exportPdf() {
+    const tableRows: Array<Array<string | number>> = [];
+    for (const row of laneRows(rowsA, driftA)) tableRows.push(["primary", ...row]);
+    if (compareEnabled) for (const row of laneRows(rowsB, driftB)) tableRows.push(["compare", ...row]);
+    const images = [
+      ...rowsA.filter((r) => r.imageDataUrl).map((r) => ({
+        dataUrl: r.imageDataUrl as string,
+        caption: `primary · CFG ${r.cfg}`,
+      })),
+      ...(compareEnabled ? rowsB.filter((r) => r.imageDataUrl).map((r) => ({
+        dataUrl: r.imageDataUrl as string,
+        caption: `compare · CFG ${r.cfg}`,
+      })) : []),
+    ];
+    downloadPdf(`guidance-sweep-${seed}-${Date.now()}.pdf`, {
+      meta: {
+        title: "Guidance Sweep",
+        subtitle: compareEnabled ? `${primaryLabel}  ↔  ${compareLabel}` : primaryLabel,
+        fields: [
+          { label: "Prompt", value: prompt },
+          { label: "Seed", value: seed },
+          { label: "Steps", value: steps },
+          { label: "Lanes", value: compareEnabled ? "2 (cross-backend)" : "1" },
+        ],
+      },
+      table: { headers: ["lane", ...headers], rows: tableRows },
+      images,
+    });
+  }
+
+  return (
+    <DeepDive actions={<ExportButtons onCsv={exportCsv} onPdf={exportPdf} onJson={exportJson} />}>
+      <Table
+        headers={["lane", ...headers]}
+        rows={[
+          ...laneRows(rowsA, driftA).map((r) => ["primary", ...r]),
+          ...(compareEnabled ? laneRows(rowsB, driftB).map((r) => ["compare", ...r]) : []),
+        ]}
+        numericColumns={[1, 6, 7]}
+      />
+    </DeepDive>
   );
 }
 
