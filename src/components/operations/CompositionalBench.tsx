@@ -10,6 +10,8 @@ import {
   type BenchTask,
   type TaskCategoryId,
 } from "@/lib/bench/tasks";
+import { saveRun } from "@/lib/cache/runs";
+import type { Run, RunSampleRef } from "@/types/run";
 
 interface DiffuseResponse {
   images: string[];
@@ -93,15 +95,17 @@ export function CompositionalBench() {
     setRows((prev) => prev.map((r, j) => (j === idx ? { ...r, ...patch } : r)));
   }
 
-  async function runOne(idx: number): Promise<{ abortAll?: boolean }> {
+  async function runOne(idx: number, imageKeyRef: { key?: string; meta?: DiffusionResultMeta }): Promise<{ abortAll?: boolean }> {
     const task = rows[idx].task;
     const MAX_ATTEMPTS = 4;
     for (let attempt = 1; attempt <= MAX_ATTEMPTS; attempt++) {
       const r = await callOnce(task.prompt);
       if (r.ok && r.data) {
         const dataUrl = r.data.images[0];
-        const runId = `bench::${r.data.meta.providerId}::${r.data.meta.modelId}::${task.id}::${seed}::${Date.now()}`;
-        await cacheImage(runId, dataUrlToBlob(dataUrl));
+        const imageKey = `bench::${r.data.meta.providerId}::${r.data.meta.modelId}::${task.id}::${seed}::${Date.now()}`;
+        await cacheImage(imageKey, dataUrlToBlob(dataUrl));
+        imageKeyRef.key = imageKey;
+        imageKeyRef.meta = r.data.meta;
         setRowAt(idx, { status: "ok", imageDataUrl: dataUrl, meta: r.data.meta });
         return {};
       }
@@ -139,15 +143,43 @@ export function CompositionalBench() {
     setRows((prev) => prev.map((r) => ({ ...r, status: "pending" as RowStatus, verdict: null, imageDataUrl: undefined, meta: undefined, errorMessage: undefined })));
 
     let aborted = false;
+    const samples: RunSampleRef[] = [];
+    let providerIdSeen: string | undefined;
+    let modelIdSeen: string | undefined;
     for (let i = 0; i < TASKS.length; i++) {
       if (aborted) {
         setRows((prev) => prev.map((r, j) => (j >= i ? { ...r, status: "error", errorMessage: "Skipped" } : r)));
         break;
       }
       setRowAt(i, { status: "running" });
-      const { abortAll } = await runOne(i);
+      const ref: { key?: string; meta?: DiffusionResultMeta } = {};
+      const { abortAll } = await runOne(i, ref);
+      if (ref.key && ref.meta) {
+        samples.push({ imageKey: ref.key, variable: TASKS[i].id, responseTimeMs: ref.meta.responseTimeMs });
+        providerIdSeen = ref.meta.providerId;
+        modelIdSeen = ref.meta.modelId;
+      }
       if (abortAll) aborted = true;
       if (i < TASKS.length - 1) await new Promise((res) => setTimeout(res, 1500));
+    }
+
+    if (samples.length > 0 && providerIdSeen && modelIdSeen) {
+      const run: Run = {
+        id: `bench::${Date.now()}`,
+        kind: "bench",
+        createdAt: new Date().toISOString(),
+        providerId: providerIdSeen,
+        modelId: modelIdSeen,
+        prompt: "(GenEval-lite pack)",
+        seed,
+        steps,
+        cfg: settings.defaults.cfg,
+        width: settings.defaults.width,
+        height: settings.defaults.height,
+        samples,
+        extra: { taskCount: TASKS.length, categoryCount: CATEGORIES.length },
+      };
+      await saveRun(run);
     }
     setRunning(false);
   }

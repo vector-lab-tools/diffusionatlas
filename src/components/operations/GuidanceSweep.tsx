@@ -4,6 +4,8 @@ import { useState } from "react";
 import { useSettings } from "@/context/DiffusionSettingsContext";
 import { useImageBlobCache } from "@/context/ImageBlobCacheContext";
 import type { DiffusionRequest, DiffusionResultMeta } from "@/lib/providers/types";
+import { saveRun } from "@/lib/cache/runs";
+import type { Run, RunSampleRef } from "@/types/run";
 
 interface DiffuseResponse {
   images: string[];
@@ -101,14 +103,16 @@ export function GuidanceSweep() {
     setRows((prev) => prev.map((r, j) => (j === idx ? { ...r, ...patch } : r)));
   }
 
-  async function runOne(cfg: number, idx: number): Promise<{ abortAll?: boolean }> {
+  async function runOne(cfg: number, idx: number, imageKeyRef: { key?: string; meta?: DiffusionResultMeta }): Promise<{ abortAll?: boolean }> {
     const MAX_ATTEMPTS = 4;
     for (let attempt = 1; attempt <= MAX_ATTEMPTS; attempt++) {
       const r = await callOnce(cfg);
       if (r.ok && r.data) {
         const dataUrl = r.data.images[0];
-        const runId = `sweep::${r.data.meta.providerId}::${r.data.meta.modelId}::${seed}::${steps}::${cfg}::${Date.now()}`;
-        await cacheImage(runId, dataUrlToBlob(dataUrl));
+        const imageKey = `sweep::${r.data.meta.providerId}::${r.data.meta.modelId}::${seed}::${steps}::${cfg}::${Date.now()}`;
+        await cacheImage(imageKey, dataUrlToBlob(dataUrl));
+        imageKeyRef.key = imageKey;
+        imageKeyRef.meta = r.data.meta;
         setRowAt(idx, { status: "ok", imageDataUrl: dataUrl, meta: r.data.meta });
         return {};
       }
@@ -154,16 +158,43 @@ export function GuidanceSweep() {
     setRows(initial);
 
     let aborted = false;
+    const samples: RunSampleRef[] = [];
+    let providerIdSeen: string | undefined;
+    let modelIdSeen: string | undefined;
     for (let i = 0; i < cfgs.length; i++) {
       if (aborted) {
         setRows((prev) => prev.map((r, j) => (j >= i ? { ...r, status: "error", errorMessage: "Skipped" } : r)));
         break;
       }
       setRowAt(i, { status: "running" });
-      const { abortAll } = await runOne(cfgs[i], i);
+      const ref: { key?: string; meta?: DiffusionResultMeta } = {};
+      const { abortAll } = await runOne(cfgs[i], i, ref);
+      if (ref.key && ref.meta) {
+        samples.push({ imageKey: ref.key, variable: cfgs[i], responseTimeMs: ref.meta.responseTimeMs });
+        providerIdSeen = ref.meta.providerId;
+        modelIdSeen = ref.meta.modelId;
+      }
       if (abortAll) aborted = true;
-      // small space-out between calls to ride under the rate limit
       if (i < cfgs.length - 1) await new Promise((res) => setTimeout(res, 1500));
+    }
+
+    if (samples.length > 0 && providerIdSeen && modelIdSeen) {
+      const run: Run = {
+        id: `sweep::${Date.now()}`,
+        kind: "sweep",
+        createdAt: new Date().toISOString(),
+        providerId: providerIdSeen,
+        modelId: modelIdSeen,
+        prompt,
+        seed,
+        steps,
+        cfg: cfgs[0],
+        width: settings.defaults.width,
+        height: settings.defaults.height,
+        samples,
+        extra: { cfgList: cfgs },
+      };
+      await saveRun(run);
     }
 
     setRunning(false);

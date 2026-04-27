@@ -4,6 +4,8 @@ import { useState } from "react";
 import { useSettings } from "@/context/DiffusionSettingsContext";
 import { useImageBlobCache } from "@/context/ImageBlobCacheContext";
 import type { DiffusionRequest, DiffusionResultMeta } from "@/lib/providers/types";
+import { saveRun } from "@/lib/cache/runs";
+import type { Run, RunSampleRef } from "@/types/run";
 
 interface DiffuseResponse {
   images: string[];
@@ -107,14 +109,16 @@ export function LatentNeighbourhood() {
     setRows((prev) => prev.map((r, j) => (j === idx ? { ...r, ...patch } : r)));
   }
 
-  async function runOne(seed: number, idx: number): Promise<{ abortAll?: boolean }> {
+  async function runOne(seed: number, idx: number, imageKeyRef: { key?: string; meta?: DiffusionResultMeta }): Promise<{ abortAll?: boolean }> {
     const MAX_ATTEMPTS = 4;
     for (let attempt = 1; attempt <= MAX_ATTEMPTS; attempt++) {
       const r = await callOnce(seed);
       if (r.ok && r.data) {
         const dataUrl = r.data.images[0];
-        const runId = `nbr::${r.data.meta.providerId}::${r.data.meta.modelId}::${seed}::${steps}::${cfg}::${Date.now()}`;
-        await cacheImage(runId, dataUrlToBlob(dataUrl));
+        const imageKey = `nbr::${r.data.meta.providerId}::${r.data.meta.modelId}::${seed}::${steps}::${cfg}::${Date.now()}`;
+        await cacheImage(imageKey, dataUrlToBlob(dataUrl));
+        imageKeyRef.key = imageKey;
+        imageKeyRef.meta = r.data.meta;
         setRowAt(idx, { status: "ok", imageDataUrl: dataUrl, meta: r.data.meta });
         return {};
       }
@@ -157,15 +161,43 @@ export function LatentNeighbourhood() {
     setRows(seeds.map((seed) => ({ seed, status: "pending" })));
 
     let aborted = false;
+    const samples: RunSampleRef[] = [];
+    let providerIdSeen: string | undefined;
+    let modelIdSeen: string | undefined;
     for (let i = 0; i < seeds.length; i++) {
       if (aborted) {
         setRows((prev) => prev.map((r, j) => (j >= i ? { ...r, status: "error", errorMessage: "Skipped" } : r)));
         break;
       }
       setRowAt(i, { status: "running" });
-      const { abortAll } = await runOne(seeds[i], i);
+      const ref: { key?: string; meta?: DiffusionResultMeta } = {};
+      const { abortAll } = await runOne(seeds[i], i, ref);
+      if (ref.key && ref.meta) {
+        samples.push({ imageKey: ref.key, variable: seeds[i], responseTimeMs: ref.meta.responseTimeMs });
+        providerIdSeen = ref.meta.providerId;
+        modelIdSeen = ref.meta.modelId;
+      }
       if (abortAll) aborted = true;
       if (i < seeds.length - 1) await new Promise((res) => setTimeout(res, 1500));
+    }
+
+    if (samples.length > 0 && providerIdSeen && modelIdSeen) {
+      const run: Run = {
+        id: `nbr::${Date.now()}`,
+        kind: "neighbourhood",
+        createdAt: new Date().toISOString(),
+        providerId: providerIdSeen,
+        modelId: modelIdSeen,
+        prompt,
+        seed: anchor,
+        steps,
+        cfg,
+        width: settings.defaults.width,
+        height: settings.defaults.height,
+        samples,
+        extra: { k, radius, anchor, seedList: seeds },
+      };
+      await saveRun(run);
     }
     setRunning(false);
   }
