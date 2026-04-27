@@ -1,7 +1,8 @@
 "use client";
 
-import { useState, type ReactNode } from "react";
+import { useEffect, useState, type ReactNode } from "react";
 import { X } from "lucide-react";
+import { computeImageStats, type ImageStats } from "@/lib/image/stats";
 
 export interface CameraRollEntry {
   src: string;
@@ -119,20 +120,24 @@ function FrameModal({ entry, onClose, onPrev, onNext, index, total }: FrameModal
             <img src={entry.src} alt={entry.caption ?? "frame"} className="w-full h-auto" />
           </div>
 
-          {entry.details && entry.details.length > 0 ? (
-            <dl className="grid grid-cols-[80px_1fr] gap-y-1 font-sans text-caption">
-              {entry.details.map((d, i) => (
-                <div key={i} className="contents">
-                  <dt className="text-muted-foreground">{d.label}</dt>
-                  <dd className="text-foreground break-words">{d.value}</dd>
-                </div>
-              ))}
-            </dl>
-          ) : (
-            <p className="font-sans text-caption text-muted-foreground italic">
-              No additional metadata for this frame.
-            </p>
-          )}
+          <div className="space-y-4">
+            {entry.details && entry.details.length > 0 ? (
+              <dl className="grid grid-cols-[80px_1fr] gap-y-1 font-sans text-caption">
+                {entry.details.map((d, i) => (
+                  <div key={i} className="contents">
+                    <dt className="text-muted-foreground">{d.label}</dt>
+                    <dd className="text-foreground break-words">{d.value}</dd>
+                  </div>
+                ))}
+              </dl>
+            ) : (
+              <p className="font-sans text-caption text-muted-foreground italic">
+                No additional metadata for this frame.
+              </p>
+            )}
+
+            <ImageStatsPanel src={entry.src} />
+          </div>
         </div>
 
         <div className="flex items-center justify-between mt-3 pt-3 border-t border-parchment">
@@ -152,6 +157,124 @@ function FrameModal({ entry, onClose, onPrev, onNext, index, total }: FrameModal
           </button>
         </div>
       </div>
+    </div>
+  );
+}
+
+function ImageStatsPanel({ src }: { src: string }) {
+  const [stats, setStats] = useState<ImageStats | null>(null);
+  const [loading, setLoading] = useState(true);
+  const [err, setErr] = useState<string | null>(null);
+
+  useEffect(() => {
+    let cancelled = false;
+    setLoading(true);
+    setErr(null);
+    computeImageStats(src)
+      .then((s) => {
+        if (!cancelled) {
+          setStats(s);
+          setLoading(false);
+        }
+      })
+      .catch((e) => {
+        if (!cancelled) {
+          setErr(e instanceof Error ? e.message : String(e));
+          setLoading(false);
+        }
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [src]);
+
+  if (loading) {
+    return (
+      <div className="border-t border-parchment pt-3">
+        <p className="font-sans text-caption text-muted-foreground italic">Computing image stats…</p>
+      </div>
+    );
+  }
+  if (err || !stats) {
+    return (
+      <div className="border-t border-parchment pt-3">
+        <p className="font-sans text-caption text-burgundy">Stats failed: {err ?? "unknown error"}</p>
+      </div>
+    );
+  }
+
+  // Each row: { label, value, hint } — hint shown as a hover title.
+  const rows: Array<{ label: string; value: string; hint: string }> = [
+    {
+      label: "Dimensions",
+      value: `${stats.width} × ${stats.height}`,
+      hint: "Pixel size of the image as analysed (capped at 256 px to keep stat computation fast).",
+    },
+    {
+      label: "Mean RGB",
+      value: `${stats.meanR.toFixed(0)} · ${stats.meanG.toFixed(0)} · ${stats.meanB.toFixed(0)}`,
+      hint: "Per-channel mean intensity (0-255). Drift across denoising steps reveals the model's colour bias.",
+    },
+    {
+      label: "Brightness",
+      value: stats.meanLuma.toFixed(1),
+      hint: "Mean luminance (0.299·R + 0.587·G + 0.114·B). Tends to settle around mid-grey as the model converges.",
+    },
+    {
+      label: "Contrast",
+      value: stats.stdLuma.toFixed(1),
+      hint: "Std-dev of luminance — a one-number measure of contrast. Inflates at high CFG.",
+    },
+    {
+      label: "Saturation",
+      value: stats.saturation.toFixed(3),
+      hint: "Mean chroma (max-channel − min-channel) normalised. Rises as the model commits to colours; mode-collapse images are over-saturated.",
+    },
+    {
+      label: "Entropy",
+      value: `${stats.entropy.toFixed(2)} bits`,
+      hint: "Shannon entropy of the luminance histogram. Pure noise approaches 8 bits; structured images settle at 6-7. The fall across steps is denoising as information reduction.",
+    },
+    {
+      label: "Edge density",
+      value: stats.edgeDensity.toFixed(3),
+      hint: "Mean Sobel-gradient magnitude (0-1). Noise has uniform high edges everywhere; structured images concentrate them at object boundaries.",
+    },
+    {
+      label: "Centre of mass",
+      value: `(${stats.centreX.toFixed(2)}, ${stats.centreY.toFixed(2)})`,
+      hint: "Luma-weighted centroid in fractional coordinates (0,0 top-left → 1,1 bottom-right). Shows where the brightness — and usually the subject — sits in the frame.",
+    },
+    {
+      label: "HF energy",
+      value: stats.highFreqRatio.toFixed(3),
+      hint: "Fraction of total energy in the (image − Gaussian-blurred image) residual. Diffusion famously denoises high frequencies first; this should fall sharply early in the trajectory.",
+    },
+    {
+      label: "PNG bytes",
+      value: stats.pngBytes.toLocaleString(),
+      hint: "Size of the canvas re-encoded as PNG. A practical proxy for Kolmogorov complexity: more compressible (smaller) images are more structured; less compressible (larger) ones are closer to noise.",
+    },
+  ];
+
+  return (
+    <div className="border-t border-parchment pt-3">
+      <h4 className="font-sans text-caption uppercase tracking-wider text-muted-foreground mb-2">
+        Image stats
+      </h4>
+      <dl className="grid grid-cols-[100px_1fr] gap-y-1 font-sans text-caption">
+        {rows.map((r) => (
+          <div key={r.label} className="contents">
+            <dt
+              className="text-muted-foreground cursor-help underline decoration-dotted decoration-muted-foreground/40 underline-offset-4"
+              title={r.hint}
+            >
+              {r.label}
+            </dt>
+            <dd className="text-foreground tabular-nums">{r.value}</dd>
+          </div>
+        ))}
+      </dl>
     </div>
   );
 }
