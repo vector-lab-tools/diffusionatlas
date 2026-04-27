@@ -78,7 +78,11 @@ export function CompositionalBench() {
           "Content-Type": "application/json",
           ...(apiKey ? { "X-Diffusion-API-Key": apiKey } : {}),
         },
-        body: JSON.stringify({ providerId: settings.providerId, request }),
+        body: JSON.stringify({
+          providerId: settings.providerId,
+          request,
+          localBaseUrl: settings.backend === "local" ? settings.localBaseUrl : undefined,
+        }),
       });
       if (!res.ok) {
         const err: GenError = await res.json().catch(() => ({ error: "unknown" }));

@@ -41,6 +41,13 @@ export interface StepFrame {
   previewPng?: Blob;
 }
 
+export interface ProviderCallOptions {
+  /** Used by hosted providers. */
+  apiKey?: string;
+  /** Used by the local provider; ignored by hosted providers. */
+  localBaseUrl?: string;
+}
+
 export interface DiffusionProvider {
   id: ProviderId;
   backend: Backend;
@@ -49,11 +56,11 @@ export interface DiffusionProvider {
     cfgSweep: boolean;
     batch: boolean;
   };
-  generate(req: DiffusionRequest, apiKey?: string): Promise<DiffusionResult>;
+  generate(req: DiffusionRequest, opts?: ProviderCallOptions): Promise<DiffusionResult>;
   trajectory?(
     req: DiffusionRequest,
     onStep: (frame: StepFrame) => void,
-    apiKey?: string,
+    opts?: ProviderCallOptions,
   ): Promise<DiffusionResult>;
 }
 

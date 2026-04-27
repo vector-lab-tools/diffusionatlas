@@ -1,0 +1,15 @@
+# Diffusion Atlas — Local Backend
+# Python 3.11+
+# Install: pip install -r requirements.txt
+# On Apple Silicon, torch wheels include MPS support automatically.
+
+fastapi>=0.115
+uvicorn[standard]>=0.34
+pydantic>=2.0
+diffusers>=0.30
+transformers>=4.45
+accelerate>=1.0
+safetensors>=0.4
+torch>=2.4
+Pillow>=10.0
+psutil>=5.9

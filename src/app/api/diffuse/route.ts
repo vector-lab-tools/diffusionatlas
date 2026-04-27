@@ -31,6 +31,8 @@ const ENV_KEY_BY_PROVIDER: Record<ProviderId, string | null> = {
 interface DiffuseRequestBody {
   providerId: ProviderId;
   request: DiffusionRequest;
+  /** Required for providerId === "local"; ignored otherwise. */
+  localBaseUrl?: string;
 }
 
 async function blobToDataURL(blob: Blob): Promise<string> {
@@ -47,7 +49,7 @@ export async function POST(req: Request) {
     return NextResponse.json({ error: "Invalid JSON body" }, { status: 400 });
   }
 
-  const { providerId, request } = body;
+  const { providerId, request, localBaseUrl } = body;
   if (!providerId || !request) {
     return NextResponse.json({ error: "Missing providerId or request" }, { status: 400 });
   }
@@ -67,7 +69,7 @@ export async function POST(req: Request) {
   const apiKey = (envKeyName ? process.env[envKeyName] : undefined) ?? headerKey;
 
   try {
-    const result = await provider.generate(request, apiKey);
+    const result = await provider.generate(request, { apiKey, localBaseUrl });
     const images = await Promise.all(result.images.map(blobToDataURL));
     return NextResponse.json({ images, meta: result.meta });
   } catch (err: unknown) {

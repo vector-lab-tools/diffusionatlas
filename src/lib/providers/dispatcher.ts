@@ -4,10 +4,12 @@
 
 import { type DiffusionProvider, type ProviderId } from "./types";
 import { replicateProvider } from "./replicate";
+import { localProvider } from "./local";
 
 const REGISTRY: Partial<Record<ProviderId, DiffusionProvider>> = {
   replicate: replicateProvider,
-  // fal, together, stability, local — to follow
+  local: localProvider,
+  // fal, together, stability — to follow
 };
 
 export function getProvider(id: ProviderId): DiffusionProvider {

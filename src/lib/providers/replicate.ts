@@ -104,7 +104,8 @@ export const replicateProvider: DiffusionProvider = {
   backend: "hosted",
   capabilities: { perStepLatents: false, cfgSweep: true, batch: false },
 
-  async generate(req, apiKey) {
+  async generate(req, opts) {
+    const apiKey = opts?.apiKey;
     if (!apiKey) throw new AuthError("replicate");
 
     const client = new Replicate({ auth: apiKey, useFileOutput: false });
