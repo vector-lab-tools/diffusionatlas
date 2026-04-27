@@ -10,6 +10,7 @@ import { ALL_PROVIDERS, PROVIDER_DEFAULT_MODEL, providerLabel } from "@/lib/prov
 import { DeepDive } from "@/components/shared/DeepDive";
 import { Table } from "@/components/shared/Table";
 import { ExportButtons } from "@/components/shared/ExportButtons";
+import { CameraRoll } from "@/components/shared/CameraRoll";
 import { downloadCsv } from "@/lib/export/csv";
 import { downloadPdf } from "@/lib/export/pdf";
 import { downloadJson } from "@/lib/export/json";
@@ -276,14 +277,14 @@ export function LatentNeighbourhood() {
     <div className="card-editorial p-6 max-w-5xl">
       <h2 className="font-display text-display-md font-bold text-burgundy mb-2">Latent Neighbourhood</h2>
       <p className="font-body text-body-sm text-foreground mb-1">
-        Sample nearby points by jittering the seed around an anchor. Reveals the local manifold structure: smoothness, basins, and where small perturbations produce categorical jumps in the output.
+        Sample nearby points on the manifold by jittering the seed around an anchor. Reveals the local geometry: smoothness, basins, and where small perturbations produce categorical jumps in the output.
       </p>
       <p className="font-sans text-caption italic text-muted-foreground mb-4">
-        Read the grid as: nearby seeds that look similar mean a smooth basin; sudden categorical jumps (a cat becomes a dog) mean a basin boundary. Small radius probes local geometry; large radius probes how connected the manifold is. With Compare on, two providers' neighbourhoods around the same anchor reveal where their geometries agree on what "near" means.
+        Read the grid as: nearby seeds that look similar mean a smooth basin in the manifold; sudden categorical jumps (a cat becomes a dog) mean a basin boundary. Small radius probes local geometry; large radius probes how connected the manifold is at distance. With Compare on, two providers' neighbourhoods around the same anchor reveal where their manifolds agree on what "near" means and where they don't.
       </p>
 
       <div className="border border-cream/80 bg-cream/30 text-foreground p-3 mb-4 font-sans text-caption rounded-sm">
-        Hosted mode samples by changing the seed (each seed maps to a different starting point in latent space). True latent-space perturbation at a chosen σ requires a `/neighbourhood` endpoint on the local backend, queued.
+        Hosted mode samples by changing the seed: each seed maps to a different starting tensor in the model's vector space, so each generation walks a different trajectory across the manifold. True Gaussian perturbation of the initial latent at a chosen σ — a tighter probe of local manifold structure — requires a `/neighbourhood` endpoint on the local backend, queued.
       </div>
 
       <div className="grid grid-cols-1 gap-3 mb-4">
@@ -524,9 +525,25 @@ function NeighbourDeepDive({ prompt, anchor, k, radius, steps, primaryLabel, row
     });
   }
 
+  const cameraEntries = [
+    ...rowsA.filter((r) => r.imageDataUrl).map((r, i) => ({
+      src: r.imageDataUrl as string,
+      caption: `seed ${r.seed}${i === 0 ? " · anchor" : ""}`,
+      subcaption: "primary",
+    })),
+    ...(compareEnabled ? rowsB.filter((r) => r.imageDataUrl).map((r, i) => ({
+      src: r.imageDataUrl as string,
+      caption: `seed ${r.seed}${i === 0 ? " · anchor" : ""}`,
+      subcaption: "compare",
+    })) : []),
+  ];
+
   return (
     <DeepDive actions={<ExportButtons onCsv={exportCsv} onPdf={exportPdf} onJson={exportJson} />}>
-      <Table headers={["lane", ...headers]} rows={tableRows} numericColumns={[1, 5]} />
+      <div className="space-y-6">
+        <CameraRoll entries={cameraEntries} />
+        <Table headers={["lane", ...headers]} rows={tableRows} numericColumns={[1, 5]} />
+      </div>
     </DeepDive>
   );
 }

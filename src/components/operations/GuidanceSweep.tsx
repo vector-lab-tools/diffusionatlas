@@ -11,6 +11,7 @@ import { ALL_PROVIDERS, PROVIDER_DEFAULT_MODEL, providerLabel } from "@/lib/prov
 import { DeepDive } from "@/components/shared/DeepDive";
 import { Table } from "@/components/shared/Table";
 import { ExportButtons } from "@/components/shared/ExportButtons";
+import { CameraRoll } from "@/components/shared/CameraRoll";
 import { downloadCsv } from "@/lib/export/csv";
 import { downloadPdf } from "@/lib/export/pdf";
 import { downloadJson } from "@/lib/export/json";
@@ -609,16 +610,32 @@ function SweepDeepDive({ prompt, seed, steps, primaryLabel, rowsA, driftA, compa
     });
   }
 
+  const cameraEntries = [
+    ...rowsA.filter((r) => r.imageDataUrl).map((r) => ({
+      src: r.imageDataUrl as string,
+      caption: `CFG ${r.cfg}`,
+      subcaption: `primary · ${r.meta?.responseTimeMs != null ? `${(r.meta.responseTimeMs / 1000).toFixed(1)}s` : ""}`,
+    })),
+    ...(compareEnabled ? rowsB.filter((r) => r.imageDataUrl).map((r) => ({
+      src: r.imageDataUrl as string,
+      caption: `CFG ${r.cfg}`,
+      subcaption: `compare · ${r.meta?.responseTimeMs != null ? `${(r.meta.responseTimeMs / 1000).toFixed(1)}s` : ""}`,
+    })) : []),
+  ];
+
   return (
     <DeepDive actions={<ExportButtons onCsv={exportCsv} onPdf={exportPdf} onJson={exportJson} />}>
-      <Table
-        headers={["lane", ...headers]}
-        rows={[
-          ...laneRows(rowsA, driftA).map((r) => ["primary", ...r]),
-          ...(compareEnabled ? laneRows(rowsB, driftB).map((r) => ["compare", ...r]) : []),
-        ]}
-        numericColumns={[1, 6, 7]}
-      />
+      <div className="space-y-6">
+        <CameraRoll entries={cameraEntries} />
+        <Table
+          headers={["lane", ...headers]}
+          rows={[
+            ...laneRows(rowsA, driftA).map((r) => ["primary", ...r]),
+            ...(compareEnabled ? laneRows(rowsB, driftB).map((r) => ["compare", ...r]) : []),
+          ]}
+          numericColumns={[1, 6, 7]}
+        />
+      </div>
     </DeepDive>
   );
 }

@@ -14,6 +14,7 @@ import torch
 from device import (
     detect_device,
     default_dtype,
+    dtype_for_model,
     is_apple_silicon,
     total_memory_gb,
 )
@@ -22,6 +23,8 @@ from device import (
 class SessionState:
     def __init__(self) -> None:
         self.device = detect_device()
+        # Default until first model load; updated to the per-model dtype
+        # whenever load() runs.
         self.dtype = default_dtype(self.device)
         self.pipeline: Any = None
         self.current_model_id: str | None = None
@@ -29,6 +32,9 @@ class SessionState:
     def load(self, model_id: str) -> None:
         if self.current_model_id == model_id and self.pipeline is not None:
             return
+
+        # Pick the right precision for this model+device combination.
+        self.dtype = dtype_for_model(model_id, self.device)
 
         # Unload previous pipeline before loading the next so we don't hold two.
         self.pipeline = None

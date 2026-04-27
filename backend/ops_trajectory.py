@@ -77,15 +77,12 @@ def _decode_latent_to_thumbnail(pipe, latent: torch.Tensor, size: int) -> str | 
 
 
 def stream(req: TrajectoryRequest, session_state) -> StreamingResponse:
-    try:
-        session_state.load(req.modelId)
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=f"Failed to load model {req.modelId}: {e}")
-
-    pipe = session_state.pipeline
-    device = session_state.device
-
+    # NB: model load happens inside the worker thread now so the client gets
+    # an immediate "model_loading" event and isn't left staring at a blank
+    # status while a 4 GB checkpoint downloads on the first request.
     q: Queue = Queue()
+
+    pipe_holder: dict = {"pipe": None}
 
     def step_callback(pipe_, step: int, timestep, kwargs):
         latent = kwargs.get("latents")
@@ -93,17 +90,49 @@ def stream(req: TrajectoryRequest, session_state) -> StreamingResponse:
             return kwargs
         try:
             step_idx = int(step) + 1
+            # Pull researcher-grade scalars off the latent + scheduler.
+            with torch.no_grad():
+                t_float = (latent.to(dtype=torch.float32, device="cpu"))
+                latent_mean = float(t_float.mean().item())
+                latent_std = float(t_float.std().item())
+                latent_min = float(t_float.min().item())
+                latent_max = float(t_float.max().item())
+                latent_norm = float(t_float.flatten().norm(p=2).item())
+            try:
+                t_value = float(timestep.item()) if hasattr(timestep, "item") else float(timestep)
+            except Exception:
+                t_value = None
+            sigma_value = None
+            try:
+                sigmas = getattr(pipe_.scheduler, "sigmas", None)
+                if sigmas is not None and step < len(sigmas):
+                    sigma_value = float(sigmas[step].item()) if hasattr(sigmas[step], "item") else float(sigmas[step])
+            except Exception:
+                sigma_value = None
             payload: dict[str, Any] = {
                 "event": "step",
                 "step": step_idx,
                 "totalSteps": int(req.steps),
                 "shape": list(latent.shape),
                 "latentB64": _encode_latent(latent),
+                "timestep": t_value,
+                "sigma": sigma_value,
+                "latentMean": latent_mean,
+                "latentStd": latent_std,
+                "latentMin": latent_min,
+                "latentMax": latent_max,
+                "latentNorm": latent_norm,
             }
-            # Decode a thumbnail every N steps. Always include the final step.
+            # Decode a thumbnail every N steps. Always include the first
+            # and last step so the camera roll shows the full arc from
+            # near-pure-noise to final image regardless of cadence.
             should_preview = (
                 req.previewEvery > 0
-                and (step_idx % req.previewEvery == 0 or step_idx == req.steps)
+                and (
+                    step_idx == 1
+                    or step_idx == req.steps
+                    or step_idx % req.previewEvery == 0
+                )
             )
             if should_preview:
                 thumb = _decode_latent_to_thumbnail(pipe_, latent, req.previewSize)
@@ -116,9 +145,31 @@ def stream(req: TrajectoryRequest, session_state) -> StreamingResponse:
 
     def worker() -> None:
         try:
-            generator = torch.Generator(device=device).manual_seed(int(req.seed))
+            # 1. Load model. First request can take 1–2 minutes (download +
+            # MPS warm-up); emit a heartbeat so the client knows what's up.
+            already_loaded = (
+                session_state.current_model_id == req.modelId
+                and session_state.pipeline is not None
+            )
+            q.put({
+                "event": "model_loading",
+                "modelId": req.modelId,
+                "alreadyLoaded": already_loaded,
+                "message": (
+                    "Model already in memory"
+                    if already_loaded
+                    else f"Loading {req.modelId} (first request can take 1–2 minutes)"
+                ),
+            })
+            session_state.load(req.modelId)
+            pipe_holder["pipe"] = session_state.pipeline
+            q.put({"event": "ready", "device": session_state.device})
+
+            pipe_local = session_state.pipeline
+            device_local = session_state.device
+            generator = torch.Generator(device=device_local).manual_seed(int(req.seed))
             started = time.time()
-            out = pipe(
+            out = pipe_local(
                 prompt=req.prompt,
                 negative_prompt=req.negativePrompt,
                 num_inference_steps=int(req.steps),

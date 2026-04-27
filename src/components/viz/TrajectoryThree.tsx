@@ -31,8 +31,14 @@ function PreviewBillboard({ position, dataUrl }: { position: Point3; dataUrl: st
  * Normalise points to a unit cube around origin so the camera framing is
  * stable regardless of latent magnitude (which varies wildly across models).
  */
-function normalise(points: Point3[]): Point3[] {
-  if (points.length === 0) return points;
+interface NormaliseResult {
+  points: Point3[];
+  /** Largest range across axes before scaling — useful for diagnostics. */
+  span: number;
+}
+
+function normalise(points: Point3[]): NormaliseResult {
+  if (points.length === 0) return { points: [], span: 0 };
   const min: Point3 = [Infinity, Infinity, Infinity];
   const max: Point3 = [-Infinity, -Infinity, -Infinity];
   for (const p of points) {
@@ -41,13 +47,29 @@ function normalise(points: Point3[]): Point3[] {
       if (p[k] > max[k]) max[k] = p[k];
     }
   }
-  const range: Point3 = [max[0] - min[0] || 1, max[1] - min[1] || 1, max[2] - min[2] || 1];
-  const scale = 2 / Math.max(range[0], range[1], range[2]);
-  return points.map((p) => [
-    (p[0] - (min[0] + max[0]) / 2) * scale,
-    (p[1] - (min[1] + max[1]) / 2) * scale,
-    (p[2] - (min[2] + max[2]) / 2) * scale,
-  ]);
+  const range: Point3 = [max[0] - min[0], max[1] - min[1], max[2] - min[2]];
+  const span = Math.max(range[0], range[1], range[2]);
+  // If the path collapsed to a single point, fall back to laying the steps
+  // out along the X axis so the user at least sees something.
+  if (span === 0 || !Number.isFinite(span)) {
+    return {
+      points: points.map((_, i) => [
+        (i / Math.max(1, points.length - 1)) * 2 - 1,
+        0,
+        0,
+      ]),
+      span: 0,
+    };
+  }
+  const scale = 1.6 / span;
+  return {
+    points: points.map((p) => [
+      (p[0] - (min[0] + max[0]) / 2) * scale,
+      (p[1] - (min[1] + max[1]) / 2) * scale,
+      (p[2] - (min[2] + max[2]) / 2) * scale,
+    ]),
+    span,
+  };
 }
 
 function Path({ points }: { points: Point3[] }) {
@@ -72,10 +94,9 @@ function StepMarkers({ points }: { points: Point3[] }) {
         const isFirst = i === 0;
         const isLast = i === last;
         const colour = isFirst ? "#c9a227" : isLast ? "#7c2d36" : "#666";
-        const radius = isFirst || isLast ? 0.05 : 0.025;
         return (
           <mesh key={i} position={p}>
-            <sphereGeometry args={[radius, 16, 16]} />
+            <sphereGeometry args={[0.025, 16, 16]} />
             <meshStandardMaterial color={colour} />
           </mesh>
         );
@@ -93,7 +114,7 @@ function AutoRotate() {
 }
 
 export function TrajectoryThree({ points, previews, height = 480 }: TrajectoryThreeProps) {
-  const norm = useMemo(() => normalise(points), [points]);
+  const { points: norm, span } = useMemo(() => normalise(points), [points]);
 
   return (
     <div style={{ height }} className="rounded-sm border border-parchment bg-cream/30 overflow-hidden">
@@ -110,15 +131,21 @@ export function TrajectoryThree({ points, previews, height = 480 }: TrajectoryTh
           ) : null,
         )}
         {norm.length > 0 && (
-          <Html position={norm[0]} distanceFactor={6}>
-            <div className="px-1 py-0.5 bg-card border border-gold rounded-sm text-[10px] font-sans text-foreground whitespace-nowrap">
+          <Html position={norm[0]} center>
+            <div
+              className="font-sans whitespace-nowrap pointer-events-none select-none"
+              style={{ color: "#c9a227", fontSize: "9px", letterSpacing: "0.08em", transform: "translate(0, -10px)", opacity: 0.7 }}
+            >
               start
             </div>
           </Html>
         )}
         {norm.length > 1 && (
-          <Html position={norm[norm.length - 1]} distanceFactor={6}>
-            <div className="px-1 py-0.5 bg-card border border-burgundy rounded-sm text-[10px] font-sans text-burgundy whitespace-nowrap">
+          <Html position={norm[norm.length - 1]} center>
+            <div
+              className="font-sans whitespace-nowrap pointer-events-none select-none"
+              style={{ color: "#7c2d36", fontSize: "9px", letterSpacing: "0.08em", transform: "translate(0, 10px)", opacity: 0.7 }}
+            >
               end
             </div>
           </Html>

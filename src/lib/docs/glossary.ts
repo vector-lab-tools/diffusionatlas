@@ -15,6 +15,16 @@ export interface Term {
 
 /** Lookup by short label/header text (case-sensitive). */
 export const GLOSSARY: Record<string, string> = {
+  // Core theoretical distinction (kept consistent across the toolkit).
+  "Vector space":
+    "The materially-grained substrate: a tensor of given dimensions, precision, and ownership. For SD 1.5 at 512×512, 4×64×64 fp32 floats. The dimensions, the dtype, the VAE scaling factor are training-and-hardware decisions, not properties of meaning.",
+  Manifold:
+    "The learned geometric surface within the vector space — the Formbestimmung that the denoising network knows how to navigate. The manifold is what makes 'a courtroom without a judge' get rendered with a judge: not a fact about the substrate, a fact about the surface trained into it.",
+  Latent:
+    "A single tensor in motion within the vector space — the per-step intermediate the U-Net is denoising. Plural noun, not a place. Distinct from 'latent space' (the older, materiality-eliding term).",
+  Trajectory:
+    "The sequence of latents from pure noise to final image. In diffusion, the trajectory is directly traced — every step is observable. (For comparison: in autoregressive LLMs, the trajectory is theoretically reconstructed from token-level outputs. The empirical directness is one of the key asymmetries between the two regimes.)",
+
   // Form fields
   Prompt: "The text input describing what the model should generate.",
   Seed: "Random seed for reproducibility. Same seed + same parameters + same model = same image.",
@@ -49,8 +59,15 @@ export const GLOSSARY: Record<string, string> = {
 
   // Latent-geometry symbols
   "‖z‖": "L2 norm of the per-step latent. Tends to be largest at the noisy start and shrinks as denoising converges.",
-  "Δ to prev": "L2 distance between this step's latent and the previous step's latent. The length of one denoising step in latent space.",
+  "Δ to prev": "L2 distance between this step's latent and the previous step's latent. The length of one denoising step across the manifold.",
   "cos→final": "Cosine similarity between this step's latent and the final latent. Rises from near 0 (pure noise) to 1 (the destination) as denoising progresses.",
+  "cos→start": "Cosine similarity between this step's latent and the first step's latent. Falls as the trajectory leaves the noise region.",
+  timestep: "Scheduler timestep value at this step (the t the noise predictor is conditioned on). Decreases monotonically from a high noise level toward zero.",
+  sigma: "The noise standard deviation the scheduler is targeting at this step. Falls toward zero as denoising converges.",
+  mean: "Arithmetic mean across all values in the latent tensor. Drifts toward zero as the model converges.",
+  std: "Standard deviation across all values in the latent tensor. Compresses as denoising removes noise.",
+  min: "Minimum value in the latent tensor.",
+  max: "Maximum value in the latent tensor.",
   "image_size": "Sweep / Neighbourhood: width × height. Trajectory: latent dim × scale factor.",
 };
 

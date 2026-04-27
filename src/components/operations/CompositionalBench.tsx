@@ -1,21 +1,23 @@
 "use client";
 
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { useSettings } from "@/context/DiffusionSettingsContext";
 import { useImageBlobCache } from "@/context/ImageBlobCacheContext";
 import type { DiffusionRequest, DiffusionResultMeta, ProviderId } from "@/lib/providers/types";
 import {
   CATEGORIES,
-  TASKS,
   type BenchTask,
   type TaskCategoryId,
 } from "@/lib/bench/tasks";
+import { BENCH_PACKS, DEFAULT_PACK_ID, packById } from "@/lib/bench/packs";
+import { Trash2, Plus } from "lucide-react";
 import { saveRun } from "@/lib/cache/runs";
 import type { Run, RunSampleRef } from "@/types/run";
 import { ALL_PROVIDERS, PROVIDER_DEFAULT_MODEL, providerLabel } from "@/lib/providers/defaults";
 import { DeepDive } from "@/components/shared/DeepDive";
 import { Table } from "@/components/shared/Table";
 import { ExportButtons } from "@/components/shared/ExportButtons";
+import { CameraRoll } from "@/components/shared/CameraRoll";
 import { downloadCsv } from "@/lib/export/csv";
 import { downloadPdf } from "@/lib/export/pdf";
 import { downloadJson } from "@/lib/export/json";
@@ -68,8 +70,24 @@ function dataUrlToBlob(dataUrl: string): Blob {
   return new Blob([buf], { type: mime });
 }
 
-function freshRows(): BenchRow[] {
-  return TASKS.map((task) => ({ task, status: "pending" as RowStatus, verdict: null }));
+function freshRows(tasks: BenchTask[]): BenchRow[] {
+  return tasks.map((task) => ({ task, status: "pending" as RowStatus, verdict: null }));
+}
+
+const PACK_STORAGE_KEY = "diffusion-atlas:bench-pack-overrides";
+type PackOverrides = Record<string, BenchTask[]>;
+
+function loadOverrides(): PackOverrides {
+  try {
+    const raw = localStorage.getItem(PACK_STORAGE_KEY);
+    return raw ? (JSON.parse(raw) as PackOverrides) : {};
+  } catch {
+    return {};
+  }
+}
+
+function saveOverrides(overrides: PackOverrides) {
+  try { localStorage.setItem(PACK_STORAGE_KEY, JSON.stringify(overrides)); } catch {}
 }
 
 function computeScores(rows: BenchRow[]): LaneScores {
@@ -96,8 +114,30 @@ export function CompositionalBench() {
 
   const [seed, setSeed] = useState(42);
   const [steps, setSteps] = useState(settings.defaults.steps);
-  const [rows, setRows] = useState<BenchRow[]>(freshRows);
-  const [rowsB, setRowsB] = useState<BenchRow[]>(freshRows);
+
+  // Pack selection + editable overrides per pack.
+  const [activePackId, setActivePackId] = useState<string>(DEFAULT_PACK_ID);
+  const [packOverrides, setPackOverrides] = useState<PackOverrides>({});
+
+  // Hydrate overrides once.
+  useEffect(() => {
+    setPackOverrides(loadOverrides());
+  }, []);
+
+  const activeTasks: BenchTask[] = useMemo(() => {
+    if (packOverrides[activePackId]) return packOverrides[activePackId];
+    return packById(activePackId)?.tasks ?? [];
+  }, [activePackId, packOverrides]);
+
+  const [rows, setRows] = useState<BenchRow[]>(() => freshRows(packById(DEFAULT_PACK_ID)?.tasks ?? []));
+  const [rowsB, setRowsB] = useState<BenchRow[]>(() => freshRows(packById(DEFAULT_PACK_ID)?.tasks ?? []));
+
+  // When the active pack (or its overrides) changes, reset both lanes to
+  // pending rows for the new pack so the grid mirrors the editable list.
+  useEffect(() => {
+    setRows(freshRows(activeTasks));
+    setRowsB(freshRows(activeTasks));
+  }, [activeTasks]);
   const [running, setRunning] = useState(false);
   const [scoring, setScoring] = useState(false);
   const [clipThreshold, setClipThreshold] = useState(0.25);
@@ -211,27 +251,28 @@ export function CompositionalBench() {
     keyPrefix: string,
     setter: React.Dispatch<React.SetStateAction<BenchRow[]>>,
   ): Promise<{ samples: RunSampleRef[]; providerIdSeen?: string; modelIdSeen?: string }> {
-    setter(freshRows());
+    const tasks = activeTasks;
+    setter(freshRows(tasks));
     const setRowAt = makeSetRowAt(setter);
     const samples: RunSampleRef[] = [];
     let providerIdSeen: string | undefined;
     let modelIdSeen: string | undefined;
     let aborted = false;
-    for (let i = 0; i < TASKS.length; i++) {
+    for (let i = 0; i < tasks.length; i++) {
       if (aborted) {
         setter((prev) => prev.map((r, j) => (j >= i ? { ...r, status: "error", errorMessage: "Skipped" } : r)));
         break;
       }
       setRowAt(i, { status: "running" });
       const ref: { key?: string; meta?: DiffusionResultMeta } = {};
-      const { abortAll } = await runOne(i, TASKS[i], cfg_, setRowAt, keyPrefix, ref);
+      const { abortAll } = await runOne(i, tasks[i], cfg_, setRowAt, keyPrefix, ref);
       if (ref.key && ref.meta) {
-        samples.push({ imageKey: ref.key, variable: TASKS[i].id, responseTimeMs: ref.meta.responseTimeMs });
+        samples.push({ imageKey: ref.key, variable: tasks[i].id, responseTimeMs: ref.meta.responseTimeMs });
         providerIdSeen = ref.meta.providerId;
         modelIdSeen = ref.meta.modelId;
       }
       if (abortAll) aborted = true;
-      if (i < TASKS.length - 1) await new Promise((res) => setTimeout(res, 1500));
+      if (i < tasks.length - 1) await new Promise((res) => setTimeout(res, 1500));
     }
     return { samples, providerIdSeen, modelIdSeen };
   }
@@ -251,7 +292,7 @@ export function CompositionalBench() {
       width: settings.defaults.width,
       height: settings.defaults.height,
       samples,
-      extra: { taskCount: TASKS.length, categoryCount: CATEGORIES.length, ...(lane ? { lane } : {}) },
+      extra: { taskCount: activeTasks.length, categoryCount: CATEGORIES.length, packId: activePackId, ...(lane ? { lane } : {}) },
     };
     await saveRun(run);
   }
@@ -269,7 +310,7 @@ export function CompositionalBench() {
       await persistRun(a.samples, a.providerIdSeen, a.modelIdSeen, "primary");
       await persistRun(b.samples, b.providerIdSeen, b.modelIdSeen, "compare");
     } else {
-      setRowsB(freshRows());
+      setRowsB(freshRows(activeTasks));
       const a = await runLane(primaryConfig, "bench", setRows);
       await persistRun(a.samples, a.providerIdSeen, a.modelIdSeen);
     }
@@ -360,6 +401,53 @@ export function CompositionalBench() {
         Mark pass/fail manually, or run <strong>Auto-score (CLIP)</strong> against the local backend to set verdicts from CLIP image-text similarity. The threshold is the cosine cutoff (0.25 is reasonable for `clip-vit-base-patch32`); you can override any verdict afterwards.
       </div>
 
+      {/* Pack picker */}
+      <div className="mb-4">
+        <div className="font-sans text-caption uppercase tracking-wider text-muted-foreground mb-2">
+          Task pack
+        </div>
+        <div className="flex flex-wrap gap-1.5 mb-2">
+          {BENCH_PACKS.map((pack) => {
+            const isActive = pack.id === activePackId;
+            return (
+              <button
+                key={pack.id}
+                onClick={() => setActivePackId(pack.id)}
+                title={pack.description}
+                className={`px-3 py-1 font-sans text-caption rounded-sm border transition-colors ${
+                  isActive
+                    ? "bg-burgundy text-primary-foreground border-burgundy"
+                    : "bg-cream/40 text-foreground border-parchment-dark hover:bg-cream/70"
+                }`}
+              >
+                {pack.label}
+              </button>
+            );
+          })}
+        </div>
+        <p className="font-sans text-caption italic text-muted-foreground">
+          {packById(activePackId)?.description}
+        </p>
+      </div>
+
+      {/* Editable task list */}
+      <BenchPackEditor
+        tasks={activeTasks}
+        packId={activePackId}
+        onChange={(next) => {
+          const overrides = { ...packOverrides, [activePackId]: next };
+          setPackOverrides(overrides);
+          saveOverrides(overrides);
+        }}
+        onReset={() => {
+          const next = { ...packOverrides };
+          delete next[activePackId];
+          setPackOverrides(next);
+          saveOverrides(next);
+        }}
+        isOverridden={!!packOverrides[activePackId]}
+      />
+
       <div className="grid grid-cols-3 gap-3 mb-4">
         <label className="block" title={lookupTerm("Seed")}>
           <span className="font-sans text-caption uppercase tracking-wider text-muted-foreground cursor-help underline decoration-dotted decoration-muted-foreground/40 underline-offset-4">Seed</span>
@@ -381,7 +469,7 @@ export function CompositionalBench() {
         </label>
         <div className="block">
           <span className="font-sans text-caption uppercase tracking-wider text-muted-foreground">Pack size</span>
-          <div className="font-sans text-body-sm mt-2">{TASKS.length} tasks · {CATEGORIES.length} categories</div>
+          <div className="font-sans text-body-sm mt-2">{activeTasks.length} tasks · {CATEGORIES.length} categories</div>
         </div>
       </div>
 
@@ -435,8 +523,8 @@ export function CompositionalBench() {
           {running
             ? "Running bench…"
             : compareEnabled
-              ? `Run bench × 2 (${TASKS.length * 2} images)`
-              : `Run bench (${TASKS.length} images)`}
+              ? `Run bench × 2 (${activeTasks.length * 2} images)`
+              : `Run bench (${activeTasks.length} images)`}
         </button>
         <button
           onClick={() => void autoScore()}
@@ -522,7 +610,98 @@ export function CompositionalBench() {
         compareLabel={`${providerLabel(compareProviderId)} · ${compareModelId}`}
         rowsB={rowsB}
         scoresB={scoresB}
+        activeTasks={activeTasks}
+        packId={activePackId}
+        packLabel={packById(activePackId)?.label ?? activePackId}
+        packIsOverridden={!!packOverrides[activePackId]}
       />
+    </div>
+  );
+}
+
+interface BenchPackEditorProps {
+  tasks: BenchTask[];
+  packId: string;
+  onChange: (next: BenchTask[]) => void;
+  onReset: () => void;
+  isOverridden: boolean;
+}
+
+function BenchPackEditor({ tasks, packId, onChange, onReset, isOverridden }: BenchPackEditorProps) {
+  const [open, setOpen] = useState(false);
+
+  function update(idx: number, patch: Partial<BenchTask>) {
+    onChange(tasks.map((t, i) => (i === idx ? { ...t, ...patch } : t)));
+  }
+  function remove(idx: number) {
+    onChange(tasks.filter((_, i) => i !== idx));
+  }
+  function add() {
+    const newId = `${packId}-custom-${Date.now()}`;
+    onChange([...tasks, { id: newId, category: "single-object", prompt: "a photograph of …", criterion: "Describe what should be visible." }]);
+  }
+
+  return (
+    <div className="border border-parchment rounded-sm bg-cream/20 mb-4">
+      <div className="flex items-center justify-between px-3 py-2">
+        <button
+          onClick={() => setOpen((v) => !v)}
+          className="font-sans text-caption uppercase tracking-wider text-muted-foreground hover:text-foreground transition-colors"
+        >
+          {open ? "▼ Hide tasks" : `▶ Edit tasks (${tasks.length})`}
+          {isOverridden && <span className="ml-2 text-burgundy">· edited</span>}
+        </button>
+        {isOverridden && (
+          <button onClick={onReset} className="font-sans text-caption text-burgundy hover:text-burgundy-900 underline underline-offset-2">
+            Reset to default
+          </button>
+        )}
+      </div>
+      {open && (
+        <div className="px-3 pb-3 space-y-2">
+          <div className="grid grid-cols-[110px_1fr_1fr_30px] gap-2 font-sans text-caption uppercase tracking-wider text-muted-foreground border-b border-parchment pb-1">
+            <span>Category</span>
+            <span>Prompt</span>
+            <span>Criterion</span>
+            <span></span>
+          </div>
+          {tasks.map((task, i) => (
+            <div key={task.id} className="grid grid-cols-[110px_1fr_1fr_30px] gap-2 items-center">
+              <select
+                value={task.category}
+                onChange={(e) => update(i, { category: e.target.value as TaskCategoryId })}
+                className="input-editorial py-1 text-caption"
+              >
+                {CATEGORIES.map((c) => (
+                  <option key={c.id} value={c.id}>{c.label}</option>
+                ))}
+              </select>
+              <input
+                type="text"
+                value={task.prompt}
+                onChange={(e) => update(i, { prompt: e.target.value })}
+                className="input-editorial py-1 text-caption"
+              />
+              <input
+                type="text"
+                value={task.criterion}
+                onChange={(e) => update(i, { criterion: e.target.value })}
+                className="input-editorial py-1 text-caption"
+              />
+              <button
+                onClick={() => remove(i)}
+                className="btn-editorial-ghost p-1"
+                title="Delete this task"
+              >
+                <Trash2 size={12} />
+              </button>
+            </div>
+          ))}
+          <button onClick={add} className="btn-editorial-secondary px-3 py-1 text-caption flex items-center gap-1 mt-2">
+            <Plus size={12} /> Add task
+          </button>
+        </div>
+      )}
     </div>
   );
 }
@@ -655,9 +834,13 @@ interface BenchDeepDiveProps {
   compareLabel: string;
   rowsB: BenchRow[];
   scoresB: LaneScores;
+  activeTasks: BenchTask[];
+  packId: string;
+  packLabel: string;
+  packIsOverridden: boolean;
 }
 
-function BenchDeepDive({ seed, steps, clipThreshold, primaryLabel, rowsA, scoresA, compareEnabled, compareLabel, rowsB, scoresB }: BenchDeepDiveProps) {
+function BenchDeepDive({ seed, steps, clipThreshold, primaryLabel, rowsA, scoresA, compareEnabled, compareLabel, rowsB, scoresB, activeTasks, packId, packLabel, packIsOverridden }: BenchDeepDiveProps) {
   function laneTaskRows(rows: BenchRow[]) {
     return rows.map((r) => [
       r.task.id,
@@ -696,6 +879,7 @@ function BenchDeepDive({ seed, steps, clipThreshold, primaryLabel, rowsA, scores
     downloadJson(`${stamp}.json`, {
       operation: "compositional-bench",
       seed, steps, clipThreshold,
+      pack: { id: packId, label: packLabel, isOverridden: packIsOverridden, tasks: activeTasks },
       primary: { label: primaryLabel, rows: rowsA, scores: scoresA },
       compare: compareEnabled ? { label: compareLabel, rows: rowsB, scores: scoresB } : null,
     });
@@ -724,15 +908,21 @@ function BenchDeepDive({ seed, steps, clipThreshold, primaryLabel, rowsA, scores
           { label: "Seed", value: seed },
           { label: "Steps", value: steps },
           { label: "CLIP threshold", value: clipThreshold.toFixed(2) },
-          { label: "Tasks", value: TASKS.length },
+          { label: "Tasks", value: activeTasks.length },
+          { label: "Pack", value: packId },
         ],
       },
       table: { headers: summaryHeaders, rows: summaryRows },
       images,
       appendix: [
         {
+          title: `Task pack · ${packLabel}${packIsOverridden ? " (edited)" : ""}`,
+          caption: `Definition of every task in the pack at run time: ${activeTasks.length} entries.`,
+          table: { headers: packHeaders, rows: packTableRows },
+        },
+        {
           title: "Per-task results",
-          caption: "Every task in the pack with its category, prompt, status, verdict, CLIP score (where available), provider, model, and response time. With Compare on, both lanes are interleaved.",
+          caption: "Every task with its category, prompt, status, verdict, CLIP score (where available), provider, model, and response time. With Compare on, both lanes are interleaved.",
           table: { headers: ["lane", ...taskHeaders], rows: taskTableRows },
         },
       ],
@@ -740,34 +930,63 @@ function BenchDeepDive({ seed, steps, clipThreshold, primaryLabel, rowsA, scores
     });
   }
 
-  if (rowsA.every((r) => r.status === "pending")) return null;
+  // Pack definition table — shown even before running, so the user can see
+  // exactly what's in the pack they're about to run.
+  const packTableRows: Array<Array<string | number>> = activeTasks.map((t) => [t.id, t.category, t.prompt, t.criterion]);
+  const packHeaders = ["task", "category", "prompt", "criterion"];
+
+  const cameraEntries = [
+    ...rowsA.filter((r) => r.imageDataUrl).map((r) => ({
+      src: r.imageDataUrl as string,
+      caption: r.task.id,
+      subcaption: `primary · ${r.verdict ?? "—"}${r.clipScore !== undefined ? ` · ${r.clipScore.toFixed(2)}` : ""}`,
+    })),
+    ...(compareEnabled ? rowsB.filter((r) => r.imageDataUrl).map((r) => ({
+      src: r.imageDataUrl as string,
+      caption: r.task.id,
+      subcaption: `compare · ${r.verdict ?? "—"}${r.clipScore !== undefined ? ` · ${r.clipScore.toFixed(2)}` : ""}`,
+    })) : []),
+  ];
 
   return (
     <DeepDive actions={<ExportButtons onCsv={exportCsv} onPdf={exportPdf} onJson={exportJson} />}>
       <div className="space-y-6">
+        {cameraEntries.length > 0 && <CameraRoll entries={cameraEntries} />}
         <div>
           <h4 className="font-sans text-caption uppercase tracking-wider text-muted-foreground mb-2">
-            Per-category accuracy
+            Task pack · {packLabel}
+            {packIsOverridden && <span className="text-burgundy ml-2">(edited)</span>}
+            <span className="text-foreground ml-2">— {activeTasks.length} tasks</span>
           </h4>
-          <div className={compareEnabled ? "grid grid-cols-1 lg:grid-cols-2 gap-4" : ""}>
+          <Table headers={packHeaders} rows={packTableRows} />
+        </div>
+        {!rowsA.every((r) => r.status === "pending") && (
+          <>
             <div>
-              <p className="font-sans text-caption text-foreground mb-1">{primaryLabel}</p>
-              <Table headers={categoryHeaders} rows={categoryRows(scoresA)} numericColumns={[1, 2, 3, 4]} />
-            </div>
-            {compareEnabled && (
-              <div>
-                <p className="font-sans text-caption text-foreground mb-1">{compareLabel}</p>
-                <Table headers={categoryHeaders} rows={categoryRows(scoresB)} numericColumns={[1, 2, 3, 4]} />
+              <h4 className="font-sans text-caption uppercase tracking-wider text-muted-foreground mb-2">
+                Per-category accuracy
+              </h4>
+              <div className={compareEnabled ? "grid grid-cols-1 lg:grid-cols-2 gap-4" : ""}>
+                <div>
+                  <p className="font-sans text-caption text-foreground mb-1">{primaryLabel}</p>
+                  <Table headers={categoryHeaders} rows={categoryRows(scoresA)} numericColumns={[1, 2, 3, 4]} />
+                </div>
+                {compareEnabled && (
+                  <div>
+                    <p className="font-sans text-caption text-foreground mb-1">{compareLabel}</p>
+                    <Table headers={categoryHeaders} rows={categoryRows(scoresB)} numericColumns={[1, 2, 3, 4]} />
+                  </div>
+                )}
               </div>
-            )}
-          </div>
-        </div>
-        <div>
-          <h4 className="font-sans text-caption uppercase tracking-wider text-muted-foreground mb-2">
-            Per-task results
-          </h4>
-          <Table headers={["lane", ...taskHeaders]} rows={taskTableRows} numericColumns={[6, 9]} />
-        </div>
+            </div>
+            <div>
+              <h4 className="font-sans text-caption uppercase tracking-wider text-muted-foreground mb-2">
+                Per-task results
+              </h4>
+              <Table headers={["lane", ...taskHeaders]} rows={taskTableRows} numericColumns={[6, 9]} />
+            </div>
+          </>
+        )}
       </div>
     </DeepDive>
   );

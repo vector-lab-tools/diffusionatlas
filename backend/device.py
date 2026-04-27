@@ -46,5 +46,52 @@ def total_memory_gb(device: DeviceName) -> float | None:
 
 
 def default_dtype(device: DeviceName) -> torch.dtype:
-    """Half precision on accelerators, full on CPU."""
-    return torch.float16 if device != "cpu" else torch.float32
+    """Conservative default when model id is unknown."""
+    return torch.float16 if device == "cuda" else torch.float32
+
+
+def dtype_for_model(model_id: str, device: DeviceName) -> torch.dtype:
+    """
+    Per-model precision policy.
+
+    On CUDA fp16 works for all current diffusion models, so use it.
+
+    On MPS:
+      - SD 1.x at fp16 has a well-known NaN-in-VAE bug that produces black
+        images. fp32 throughout fits at 512×512 in unified memory and is
+        the only stable configuration. SD 2.x is similarly old and
+        treated the same way.
+      - SDXL, SD3, and FLUX are large enough that fp32 won't fit, but they
+        are stable at bfloat16 — wider exponent range than fp16 so the VAE
+        doesn't blow up, and roughly half the memory of fp32. PyTorch 2.4+
+        on Apple Silicon supports bf16 across the relevant ops.
+
+    On CPU, fp32 is the only realistic option.
+    """
+    if device == "cuda":
+        return torch.float16
+    if device == "cpu":
+        return torch.float32
+
+    # MPS path: lower-case match on the model id to pick a family.
+    mid = model_id.lower()
+
+    # Older Stable Diffusion 1.x / 2.x: fp32 on MPS.
+    if "stable-diffusion-v1-" in mid or mid.endswith("/sd-v1"):
+        return torch.float32
+    if "stable-diffusion-2" in mid or "stable-diffusion-v2-" in mid:
+        return torch.float32
+
+    # SDXL, SD3, FLUX, and anything else heavy: bfloat16.
+    if (
+        "xl" in mid
+        or "stable-diffusion-3" in mid
+        or "sd3" in mid
+        or "flux" in mid
+        or "kandinsky" in mid
+        or "playground" in mid
+    ):
+        return torch.bfloat16
+
+    # Fallback: fp32 is safe but slow.
+    return torch.float32

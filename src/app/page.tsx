@@ -23,6 +23,7 @@ import { GuidanceSweep } from "@/components/operations/GuidanceSweep";
 import { LatentNeighbourhood } from "@/components/operations/LatentNeighbourhood";
 import { CompositionalBench } from "@/components/operations/CompositionalBench";
 import { LibraryBrowse } from "@/components/operations/LibraryBrowse";
+import { Clippy } from "@/components/easter-eggs/Clippy";
 
 function AppContent() {
   const [activeTab, setActiveTab] = useState<TabId>("trajectory");
@@ -43,6 +44,7 @@ function AppContent() {
 
       <StatusBar lastQueryTime={lastQueryTime} />
       <SettingsPanel />
+      <Clippy />
     </div>
   );
 }
