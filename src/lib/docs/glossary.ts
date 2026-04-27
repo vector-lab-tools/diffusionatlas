@@ -28,7 +28,7 @@ export const GLOSSARY: Record<string, string> = {
   // Form fields
   Prompt: "The text input describing what the model should generate.",
   Seed: "Random seed for reproducibility. Same seed + same parameters + same model = same image.",
-  Steps: "Number of denoising steps. More steps usually means cleaner output but slower generation.",
+  Steps: "Number of denoising steps. More steps usually means cleaner output but slower generation. With the DPMSolverMultistep (DPM++ 2M Karras) scheduler the backend pins, suggested tiers for SD 1.5 are: 8 = low (quick smoke test, subject recognisable, detail soft), 12 = normal (default — coherent, sharp-enough images, fast feedback), 20 = high (crisper detail, longer trajectories), 30+ = research-grade (marginal gains for stress-testing CFG or fine text). Distilled models like FLUX Schnell or LCM go the other way and want 1–4 steps.",
   CFG: "Classifier-Free Guidance scale. Higher values push the trajectory more aggressively toward the prompt; too high causes oversaturated mode collapse, too low drifts off-prompt.",
   "CFG list": "Comma-separated list of CFG values to sweep. The drift curve plots distance from the baseline (CFG nearest 7.5).",
   "Anchor seed": "Centre of the neighbourhood. Other seeds are deterministic offsets within ±radius.",
@@ -36,6 +36,11 @@ export const GLOSSARY: Record<string, string> = {
   Radius: "Maximum integer offset from the anchor seed. Larger values probe how connected the manifold is at distance.",
   "Preview every": "How often to decode an intermediate latent through the VAE for a thumbnail. 0 disables previews. Each thumbnail adds one VAE decode to the trajectory time.",
   Threshold: "CLIP cosine similarity cutoff. Above this is pass, below is fail. 0.20 is permissive, 0.30 is strict — what counts as 'matching' is a methodological choice.",
+  "Compare provider": "Optional second backend to run the same job against. The two lanes (primary + compare) execute in parallel and their results sit side-by-side in the table and gallery so you can see how providers diverge on the same prompt + seed.",
+  "Compare model": "Model identifier for the comparison lane. Useful for cross-backend (e.g. local SD 1.5 vs. hosted FLUX) or cross-version (SDXL vs. SD 3) comparisons.",
+  "Pack size": "Number of tasks pulled from the chosen task pack (small = quick smoke test, full = whole benchmark). Each task runs across all configured seeds, so total calls = pack size × seeds × lanes.",
+  Width: "Image width in pixels. SD 1.5 was trained at 512; SDXL and FLUX expect 1024. Mismatched sizes produce black images on some backends.",
+  Height: "Image height in pixels. Match Width and the model's training resolution.",
 
   // Table column headers
   lane: "Which provider lane this row belongs to: primary (the main backend) or compare (the second backend in cross-backend mode).",

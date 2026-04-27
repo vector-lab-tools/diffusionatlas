@@ -19,6 +19,15 @@ export interface DiffusionSettings {
   localBaseUrl: string;
   apiKeys: Partial<Record<ProviderId, string>>;
   darkMode: boolean;
+  /** Global override: when on, every operation clamps its step count to fastModeMaxSteps. */
+  fastMode: boolean;
+  fastModeMaxSteps: number;
+}
+
+/** Resolve the effective step count given a form value and current settings. */
+export function effectiveSteps(formSteps: number, settings: DiffusionSettings): number {
+  if (settings.fastMode) return Math.min(formSteps, settings.fastModeMaxSteps);
+  return formSteps;
 }
 
 const DEFAULT_SETTINGS: DiffusionSettings = {
@@ -29,6 +38,8 @@ const DEFAULT_SETTINGS: DiffusionSettings = {
   localBaseUrl: "http://localhost:8000",
   apiKeys: {},
   darkMode: false,
+  fastMode: false,
+  fastModeMaxSteps: 8,
 };
 
 interface SettingsCtx {

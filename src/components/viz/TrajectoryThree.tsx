@@ -21,6 +21,12 @@ interface TrajectoryThreeProps {
   /** Multi-layer mode: pass an array of named/coloured layers to overlay. */
   layers?: TrajectoryLayerInput[];
   height?: number;
+  /**
+   * Show a preview thumbnail every Nth step. 1 = every step (dense),
+   * higher values thin the swarm so the curve itself stays readable.
+   * Endpoints (first and last preview) are always shown regardless.
+   */
+  previewStride?: number;
 }
 
 function PreviewBillboard({ position, dataUrl }: { position: Point3; dataUrl: string }) {
@@ -117,7 +123,7 @@ function AutoRotate() {
   return null;
 }
 
-export function TrajectoryThree({ points, previews, layers, height = 480 }: TrajectoryThreeProps) {
+export function TrajectoryThree({ points, previews, layers, height = 480, previewStride = 1 }: TrajectoryThreeProps) {
   // Build a unified list of layers. Legacy single-layer callers still work.
   const renderLayers = useMemo<TrajectoryLayerInput[]>(() => {
     if (layers && layers.length > 0) return layers;
@@ -155,11 +161,22 @@ export function TrajectoryThree({ points, previews, layers, height = 480 }: Traj
           <group key={layer.id}>
             <Path points={layer.points} color={layer.colour} />
             <StepMarkers points={layer.points} color={layer.colour} />
-            {layer.previews?.map((url, i) =>
-              url && i < layer.points.length ? (
-                <PreviewBillboard key={`${layer.id}-${i}`} position={layer.points[i]} dataUrl={url} />
-              ) : null,
-            )}
+            {(() => {
+              const stride = Math.max(1, Math.floor(previewStride));
+              const previewIdxs = (layer.previews ?? [])
+                .map((url, i) => ({ url, i }))
+                .filter(({ url }) => Boolean(url));
+              // Always include the last available preview so the "destination"
+              // thumbnail anchors the end of the curve, even when stride skips it.
+              const lastIdx = previewIdxs.length > 0 ? previewIdxs[previewIdxs.length - 1].i : -1;
+              return previewIdxs
+                .filter(({ i }) => i % stride === 0 || i === lastIdx)
+                .map(({ url, i }) =>
+                  url && i < layer.points.length ? (
+                    <PreviewBillboard key={`${layer.id}-${i}`} position={layer.points[i]} dataUrl={url} />
+                  ) : null,
+                );
+            })()}
             {layer.points.length > 0 && (
               <Html position={layer.points[0]} center>
                 <div

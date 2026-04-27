@@ -1,7 +1,7 @@
 "use client";
 
 import { useEffect, useMemo, useState } from "react";
-import { useSettings } from "@/context/DiffusionSettingsContext";
+import { useSettings, effectiveSteps } from "@/context/DiffusionSettingsContext";
 import { useImageBlobCache } from "@/context/ImageBlobCacheContext";
 import type { DiffusionRequest, DiffusionResultMeta, ProviderId } from "@/lib/providers/types";
 import {
@@ -18,6 +18,7 @@ import { DeepDive } from "@/components/shared/DeepDive";
 import { Table } from "@/components/shared/Table";
 import { ExportButtons } from "@/components/shared/ExportButtons";
 import { CameraRoll } from "@/components/shared/CameraRoll";
+import { RandomSeedButton } from "@/components/shared/RandomSeedButton";
 import { downloadCsv } from "@/lib/export/csv";
 import { downloadPdf } from "@/lib/export/pdf";
 import { downloadJson } from "@/lib/export/json";
@@ -168,7 +169,7 @@ export function CompositionalBench() {
       modelId: cfg_.modelId,
       prompt,
       seed,
-      steps,
+      steps: effectiveSteps(steps, settings),
       cfg: settings.defaults.cfg,
       width: settings.defaults.width,
       height: settings.defaults.height,
@@ -451,12 +452,15 @@ export function CompositionalBench() {
       <div className="grid grid-cols-3 gap-3 mb-4">
         <label className="block" title={lookupTerm("Seed")}>
           <span className="font-sans text-caption uppercase tracking-wider text-muted-foreground cursor-help underline decoration-dotted decoration-muted-foreground/40 underline-offset-4">Seed</span>
-          <input
-            type="number"
-            value={seed}
-            onChange={(e) => setSeed(parseInt(e.target.value, 10) || 0)}
-            className="input-editorial mt-1"
-          />
+          <div className="flex items-stretch gap-1 mt-1">
+            <input
+              type="number"
+              value={seed}
+              onChange={(e) => setSeed(parseInt(e.target.value, 10) || 0)}
+              className="input-editorial flex-1 min-w-0"
+            />
+            <RandomSeedButton onPick={setSeed} />
+          </div>
         </label>
         <label className="block" title={lookupTerm("Steps")}>
           <span className="font-sans text-caption uppercase tracking-wider text-muted-foreground cursor-help underline decoration-dotted decoration-muted-foreground/40 underline-offset-4">Steps</span>
@@ -467,8 +471,8 @@ export function CompositionalBench() {
             className="input-editorial mt-1"
           />
         </label>
-        <div className="block">
-          <span className="font-sans text-caption uppercase tracking-wider text-muted-foreground">Pack size</span>
+        <div className="block" title={lookupTerm("Pack size")}>
+          <span className="font-sans text-caption uppercase tracking-wider text-muted-foreground cursor-help underline decoration-dotted decoration-muted-foreground/40 underline-offset-4">Pack size</span>
           <div className="font-sans text-body-sm mt-2">{activeTasks.length} tasks · {CATEGORIES.length} categories</div>
         </div>
       </div>
@@ -485,8 +489,8 @@ export function CompositionalBench() {
         </label>
         {compareEnabled && (
           <div className="grid grid-cols-2 gap-3 mt-3">
-            <label className="block">
-              <span className="font-sans text-caption uppercase tracking-wider text-muted-foreground">Compare provider</span>
+            <label className="block" title={lookupTerm("Compare provider")}>
+              <span className="font-sans text-caption uppercase tracking-wider text-muted-foreground cursor-help underline decoration-dotted decoration-muted-foreground/40 underline-offset-4">Compare provider</span>
               <select
                 value={compareProviderId}
                 onChange={(e) => {
@@ -501,8 +505,8 @@ export function CompositionalBench() {
                 ))}
               </select>
             </label>
-            <label className="block">
-              <span className="font-sans text-caption uppercase tracking-wider text-muted-foreground">Compare model</span>
+            <label className="block" title={lookupTerm("Compare model")}>
+              <span className="font-sans text-caption uppercase tracking-wider text-muted-foreground cursor-help underline decoration-dotted decoration-muted-foreground/40 underline-offset-4">Compare model</span>
               <input
                 type="text"
                 value={compareModelId}

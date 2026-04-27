@@ -90,7 +90,7 @@ interface FrameModalProps {
   total: number;
 }
 
-function FrameModal({ entry, onClose, onPrev, onNext, index, total }: FrameModalProps) {
+export function FrameModal({ entry, onClose, onPrev, onNext, index, total }: FrameModalProps) {
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center bg-ink/60 p-4" onClick={onClose}>
       <div
@@ -115,9 +115,30 @@ function FrameModal({ entry, onClose, onPrev, onNext, index, total }: FrameModal
         </div>
 
         <div className="grid grid-cols-1 sm:grid-cols-[280px_1fr] gap-4">
-          <div className="bg-cream/40 border border-parchment rounded-sm overflow-hidden flex items-center justify-center" style={{ maxHeight: "320px" }}>
-            {/* eslint-disable-next-line @next/next/no-img-element */}
-            <img src={entry.src} alt={entry.caption ?? "frame"} className="w-full h-auto object-contain" style={{ maxHeight: "320px" }} />
+          <div className="flex flex-col gap-2">
+            <div className="bg-cream/40 border border-parchment rounded-sm overflow-hidden flex items-center justify-center" style={{ maxHeight: "320px" }}>
+              {/* eslint-disable-next-line @next/next/no-img-element */}
+              <img src={entry.src} alt={entry.caption ?? "frame"} className="w-full h-auto object-contain" style={{ maxHeight: "320px" }} />
+            </div>
+            <div className="flex items-center justify-between">
+              <button
+                onClick={onPrev}
+                disabled={!onPrev}
+                className={onPrev ? "btn-editorial-secondary px-3 py-1 text-caption" : "btn-editorial-secondary px-3 py-1 text-caption opacity-30 cursor-not-allowed"}
+              >
+                ← previous
+              </button>
+              <span className="font-sans text-caption text-muted-foreground">
+                {index + 1} / {total}
+              </span>
+              <button
+                onClick={onNext}
+                disabled={!onNext}
+                className={onNext ? "btn-editorial-secondary px-3 py-1 text-caption" : "btn-editorial-secondary px-3 py-1 text-caption opacity-30 cursor-not-allowed"}
+              >
+                next →
+              </button>
+            </div>
           </div>
 
           <div className="space-y-4">
@@ -140,22 +161,6 @@ function FrameModal({ entry, onClose, onPrev, onNext, index, total }: FrameModal
           </div>
         </div>
 
-        <div className="flex items-center justify-between mt-3 pt-3 border-t border-parchment">
-          <button
-            onClick={onPrev}
-            disabled={!onPrev}
-            className={onPrev ? "btn-editorial-secondary px-3 py-1 text-caption" : "btn-editorial-secondary px-3 py-1 text-caption opacity-30 cursor-not-allowed"}
-          >
-            ← previous
-          </button>
-          <button
-            onClick={onNext}
-            disabled={!onNext}
-            className={onNext ? "btn-editorial-secondary px-3 py-1 text-caption" : "btn-editorial-secondary px-3 py-1 text-caption opacity-30 cursor-not-allowed"}
-          >
-            next →
-          </button>
-        </div>
       </div>
     </div>
   );
@@ -306,27 +311,34 @@ function ImageStatsPanel({ src }: { src: string }) {
  * inline SVGs. Diffusion-trajectory-relevant: their shape moves from flat
  * (noise) to peaky (structure) as denoising progresses. */
 function Histograms({ stats }: { stats: ImageStats }) {
-  const W = 240;
-  const H = 36;
+  const VB_W = 100;
+  const VB_H = 36;
+  // Click to toggle between the per-channel bar grid and the
+  // Photoshop/Lightroom-style overlapping-channel "gaussian" overlay.
+  const [mode, setMode] = useState<"bars" | "overlay">("overlay");
 
   function bars(values: number[], colour: string, label: string, hint: string) {
     const max = Math.max(1, ...values);
-    const barW = W / values.length;
+    const barW = VB_W / values.length;
     return (
-      <div title={hint} className="cursor-help">
-        <div className="flex items-center gap-2 font-sans text-[10px] text-muted-foreground mb-0.5">
-          <span className="inline-block w-2 h-2 rounded-sm" style={{ background: colour }} />
+      <div title={hint} className="min-w-0">
+        <div className="flex items-center gap-1.5 font-sans text-[10px] text-muted-foreground mb-0.5">
+          <span className="inline-block w-2 h-2 rounded-sm flex-shrink-0" style={{ background: colour }} />
           <span>{label}</span>
         </div>
-        <svg viewBox={`0 0 ${W} ${H}`} width={W} height={H} className="block">
+        <svg
+          viewBox={`0 0 ${VB_W} ${VB_H}`}
+          preserveAspectRatio="none"
+          className="block w-full h-9"
+        >
           {values.map((v, i) => {
-            const h = (v / max) * H;
+            const h = (v / max) * VB_H;
             return (
               <rect
                 key={i}
                 x={i * barW}
-                y={H - h}
-                width={Math.max(1, barW - 0.5)}
+                y={VB_H - h}
+                width={Math.max(0.5, barW - 0.2)}
                 height={h}
                 fill={colour}
                 opacity={0.85}
@@ -338,12 +350,62 @@ function Histograms({ stats }: { stats: ImageStats }) {
     );
   }
 
+  function overlayPolygon(values: number[], max: number): string {
+    const bins = values.length;
+    const stepX = VB_W / bins;
+    const pts: string[] = [`0,${VB_H}`];
+    for (let i = 0; i < bins; i++) {
+      const x = i * stepX + stepX / 2;
+      const y = VB_H - (values[i] / max) * VB_H;
+      pts.push(`${x.toFixed(2)},${y.toFixed(2)}`);
+    }
+    pts.push(`${VB_W},${VB_H}`);
+    return pts.join(" ");
+  }
+
   return (
-    <div className="grid grid-cols-2 gap-3">
-      {bars(stats.histR, "#cd2650", "R", "Red-channel histogram (32 bins). A flat distribution → noise; peaks → committed colour structure.")}
-      {bars(stats.histG, "#3b7d4f", "G", "Green-channel histogram (32 bins).")}
-      {bars(stats.histB, "#2e5d8a", "B", "Blue-channel histogram (32 bins).")}
-      {bars(stats.histLuma, "#444", "Luma", "Luminance histogram. The shape moves from flat (noise) to a Gaussian-ish peak as denoising progresses; bimodal shapes suggest distinct light/dark regions in the image.")}
-    </div>
+    <button
+      type="button"
+      onClick={() => setMode((m) => (m === "bars" ? "overlay" : "bars"))}
+      className="block w-full text-left cursor-pointer"
+      title={
+        mode === "bars"
+          ? "Click to switch to overlapping-channel (Photoshop-style) view"
+          : "Click to switch back to per-channel bar histograms"
+      }
+    >
+      {mode === "bars" ? (
+        <div className="grid grid-cols-2 gap-x-3 gap-y-1">
+          {bars(stats.histR, "#cd2650", "R", "Red-channel histogram (32 bins). A flat distribution → noise; peaks → committed colour structure.")}
+          {bars(stats.histG, "#3b7d4f", "G", "Green-channel histogram (32 bins).")}
+          {bars(stats.histB, "#2e5d8a", "B", "Blue-channel histogram (32 bins).")}
+          {bars(stats.histLuma, "#444", "Luma", "Luminance histogram. The shape moves from flat (noise) to a Gaussian-ish peak as denoising progresses; bimodal shapes suggest distinct light/dark regions in the image.")}
+        </div>
+      ) : (
+        <div className="min-w-0">
+          <div className="flex items-center gap-3 font-sans text-[10px] text-muted-foreground mb-0.5">
+            <span className="flex items-center gap-1"><span className="inline-block w-2 h-2 rounded-sm" style={{ background: "#cd2650" }} />R</span>
+            <span className="flex items-center gap-1"><span className="inline-block w-2 h-2 rounded-sm" style={{ background: "#3b7d4f" }} />G</span>
+            <span className="flex items-center gap-1"><span className="inline-block w-2 h-2 rounded-sm" style={{ background: "#2e5d8a" }} />B</span>
+            <span className="ml-auto italic">overlay · click to bars</span>
+          </div>
+          {(() => {
+            const max = Math.max(1, ...stats.histR, ...stats.histG, ...stats.histB);
+            return (
+              <svg
+                viewBox={`0 0 ${VB_W} ${VB_H}`}
+                preserveAspectRatio="none"
+                className="block w-full h-20 bg-neutral-50 border border-neutral-200 rounded-[2px]"
+                style={{ mixBlendMode: "multiply" }}
+              >
+                <polygon points={overlayPolygon(stats.histR, max)} fill="rgba(205, 38, 80, 0.45)" stroke="rgba(165, 25, 60, 0.9)" strokeWidth="0.4" />
+                <polygon points={overlayPolygon(stats.histG, max)} fill="rgba(59, 125, 79, 0.45)" stroke="rgba(30, 90, 50, 0.9)" strokeWidth="0.4" />
+                <polygon points={overlayPolygon(stats.histB, max)} fill="rgba(46, 93, 138, 0.45)" stroke="rgba(20, 60, 110, 0.9)" strokeWidth="0.4" />
+              </svg>
+            );
+          })()}
+        </div>
+      )}
+    </button>
   );
 }

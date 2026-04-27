@@ -1,7 +1,7 @@
 "use client";
 
 import { useState } from "react";
-import { useSettings } from "@/context/DiffusionSettingsContext";
+import { useSettings, effectiveSteps } from "@/context/DiffusionSettingsContext";
 import { useImageBlobCache } from "@/context/ImageBlobCacheContext";
 import type { DiffusionRequest, DiffusionResultMeta, ProviderId } from "@/lib/providers/types";
 import { saveRun } from "@/lib/cache/runs";
@@ -15,6 +15,8 @@ import { downloadCsv } from "@/lib/export/csv";
 import { downloadPdf } from "@/lib/export/pdf";
 import { downloadJson } from "@/lib/export/json";
 import { lookup as lookupTerm, termsFor } from "@/lib/docs/glossary";
+import { PromptChips, STARTER_PRESETS } from "@/components/shared/PromptChips";
+import { RandomSeedButton } from "@/components/shared/RandomSeedButton";
 
 interface DiffuseResponse {
   images: string[];
@@ -112,7 +114,7 @@ export function LatentNeighbourhood() {
       modelId: cfg_.modelId,
       prompt,
       seed,
-      steps,
+      steps: effectiveSteps(steps, settings),
       cfg,
       width: settings.defaults.width,
       height: settings.defaults.height,
@@ -297,15 +299,19 @@ export function LatentNeighbourhood() {
             className="input-editorial mt-1"
           />
         </label>
+        <PromptChips active={prompt} presets={STARTER_PRESETS} onPick={setPrompt} />
         <div className="grid grid-cols-4 gap-3">
           <label className="block" title={lookupTerm("Anchor seed")}>
             <span className="font-sans text-caption uppercase tracking-wider text-muted-foreground cursor-help underline decoration-dotted decoration-muted-foreground/40 underline-offset-4">Anchor seed</span>
-            <input
-              type="number"
-              value={anchor}
-              onChange={(e) => setAnchor(parseInt(e.target.value, 10) || 0)}
-              className="input-editorial mt-1"
-            />
+            <div className="flex items-stretch gap-1 mt-1">
+              <input
+                type="number"
+                value={anchor}
+                onChange={(e) => setAnchor(parseInt(e.target.value, 10) || 0)}
+                className="input-editorial flex-1 min-w-0"
+              />
+              <RandomSeedButton onPick={setAnchor} title="Roll a fresh random anchor seed (other neighbourhood seeds are deterministic offsets from this one)" />
+            </div>
           </label>
           <label className="block" title={lookupTerm("k samples")}>
             <span className="font-sans text-caption uppercase tracking-wider text-muted-foreground cursor-help underline decoration-dotted decoration-muted-foreground/40 underline-offset-4">k samples</span>
@@ -352,8 +358,8 @@ export function LatentNeighbourhood() {
         </label>
         {compareEnabled && (
           <div className="grid grid-cols-2 gap-3 mt-3">
-            <label className="block">
-              <span className="font-sans text-caption uppercase tracking-wider text-muted-foreground">Compare provider</span>
+            <label className="block" title={lookupTerm("Compare provider")}>
+              <span className="font-sans text-caption uppercase tracking-wider text-muted-foreground cursor-help underline decoration-dotted decoration-muted-foreground/40 underline-offset-4">Compare provider</span>
               <select
                 value={compareProviderId}
                 onChange={(e) => {
@@ -368,8 +374,8 @@ export function LatentNeighbourhood() {
                 ))}
               </select>
             </label>
-            <label className="block">
-              <span className="font-sans text-caption uppercase tracking-wider text-muted-foreground">Compare model</span>
+            <label className="block" title={lookupTerm("Compare model")}>
+              <span className="font-sans text-caption uppercase tracking-wider text-muted-foreground cursor-help underline decoration-dotted decoration-muted-foreground/40 underline-offset-4">Compare model</span>
               <input
                 type="text"
                 value={compareModelId}

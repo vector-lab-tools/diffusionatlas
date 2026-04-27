@@ -154,8 +154,13 @@ export function Clippy() {
           setMessage(pickRandom(CLIPPY_MESSAGES));
           setMessageKey((k) => k + 1);
           setVisible(true);
+        } else if (!visible) {
+          // Re-opening clippy: pick a fresh random message so it's never empty.
+          setMessage(pickRandom(CLIPPY_MESSAGES));
+          setMessageKey((k) => k + 1);
+          setVisible(true);
         } else {
-          setVisible((v) => !v);
+          setVisible(false);
         }
       }
       if (buffer.endsWith("hacker")) {
@@ -185,22 +190,25 @@ export function Clippy() {
     ? "bg-black border border-green-500 text-green-400 font-mono"
     : "bg-card border border-parchment-dark text-foreground font-sans";
   const hintText = isHackerman ? 'type "clippy" to downgrade' : 'type "clippy" to dismiss · "hacker" for h4x0r mode';
+  const characterName = isHackerman ? "h4x0r" : "Clippy";
 
   return (
-    <div className="fixed bottom-4 right-4 z-[10000] animate-fade-in pointer-events-none flex flex-col items-end">
-      <div
-        key={messageKey}
-        className={`mb-3 p-3 rounded-sm max-w-[340px] text-body-sm shadow-editorial-md animate-fade-in pointer-events-auto ${bubbleClass}`}
-      >
-        <p className="leading-relaxed whitespace-pre-line">{message}</p>
-        <p className={`mt-2 text-caption ${isHackerman ? "text-green-700" : "text-slate"}`}>{hintText}</p>
-      </div>
+    <div className="fixed bottom-16 right-4 z-[10000] animate-fade-in pointer-events-none flex flex-col items-end">
+      {message && (
+        <div
+          key={messageKey}
+          className={`mb-2 p-2.5 rounded-sm max-w-[300px] shadow-editorial-md animate-fade-in pointer-events-auto ${bubbleClass}`}
+        >
+          <p className="leading-snug whitespace-pre-line text-[11px]">{message}</p>
+        </div>
+      )}
 
       {/* Paperclip character */}
-      <div
-        className="cursor-pointer hover:scale-110 active:scale-95 transition-transform inline-block pointer-events-auto"
-        onClick={showRandomMessage}
-      >
+      <div className="flex flex-col items-center pointer-events-auto">
+        <div
+          className="cursor-pointer hover:scale-110 active:scale-95 transition-transform inline-block"
+          onClick={showRandomMessage}
+        >
         <svg width="48" height="64" viewBox="0 0 48 64">
           <path
             d="M24 4 C12 4, 8 12, 8 20 L8 44 C8 52, 12 58, 20 58 L28 58 C36 58, 40 52, 40 44 L40 20 C40 12, 36 8, 28 8 L20 8"
@@ -231,9 +239,21 @@ export function Clippy() {
             strokeLinecap="round"
           />
         </svg>
-        {isHackerman && (
-          <div className="absolute -bottom-1 -right-1 text-[8px] text-green-500 font-mono">h4x0r</div>
-        )}
+        </div>
+        <div className="mt-0.5 text-center leading-tight bg-card/95 border border-parchment-dark rounded-sm px-1.5 py-0.5 shadow-editorial">
+          <div
+            className={`font-display text-[10px] italic ${
+              isHackerman ? "text-green-500 font-mono not-italic" : "text-burgundy"
+            }`}
+          >
+            {characterName}
+          </div>
+          <div
+            className={`text-[8px] whitespace-nowrap ${isHackerman ? "text-green-700" : "text-muted-foreground"}`}
+          >
+            {hintText}
+          </div>
+        </div>
       </div>
     </div>
   );

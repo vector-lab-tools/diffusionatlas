@@ -43,6 +43,18 @@ export interface PdfGlossaryEntry {
   definition: string;
 }
 
+/**
+ * One self-contained block within the PDF — a layer / lane / sweep entry.
+ * Images and tables stay together rather than being lumped across the
+ * whole document. Newest-first ordering is the caller's responsibility.
+ */
+export interface PdfGroup {
+  title: string;
+  caption?: string;
+  images?: PdfImage[];
+  tables?: PdfAppendixSection[];
+}
+
 export interface PdfDoc {
   meta: PdfMeta;
   /** Optional summary table on the main page (kept short — high-level only). */
@@ -50,6 +62,13 @@ export interface PdfDoc {
   images?: PdfImage[];
   /** Detailed deep-dive data; rendered on a new page (or pages) at the end. */
   appendix?: PdfAppendixSection[];
+  /**
+   * Per-group layout: each group renders its own header, image grid, and
+   * tables on its own page(s). Used by Denoise Trajectory so each layer's
+   * camera roll, latent-geometry table, and image-stats table stay
+   * together. When provided, takes precedence over flat `images` / `appendix`.
+   */
+  groups?: PdfGroup[];
   /** Definitions for the parameters and column headers used in this doc. */
   glossary?: PdfGlossaryEntry[];
 }
@@ -117,8 +136,9 @@ function drawTable(doc: jsPDF, startY: number, table: PdfTable): number {
   return finalY + 4;
 }
 
-function drawImages(doc: jsPDF, startY: number, images: PdfImage[]): void {
-  // 3-up grid, each ~58mm wide.
+function drawImages(doc: jsPDF, startY: number, images: PdfImage[]): number {
+  // 3-up grid, each ~58mm wide. Returns the y-cursor after drawing so a
+  // caller can continue rendering tables underneath.
   const cols = 3;
   const cellW = (PAGE_W - 2 * MARGIN - (cols - 1) * 4) / cols;
   const cellH = cellW; // square
@@ -144,6 +164,9 @@ function drawImages(doc: jsPDF, startY: number, images: PdfImage[]): void {
       y += cellH + 8;
     }
   }
+  // Advance past the trailing partial row, if any.
+  if (col !== 0) y += cellH + 8;
+  return y;
 }
 
 function drawAppendix(doc: jsPDF, sections: PdfAppendixSection[]): void {
@@ -178,6 +201,67 @@ function drawAppendix(doc: jsPDF, sections: PdfAppendixSection[]): void {
     y = drawTable(doc, y, section.table);
     y += 4;
   }
+}
+
+function drawGroups(doc: jsPDF, groups: PdfGroup[]): void {
+  groups.forEach((group, gi) => {
+    // Each group starts on a fresh page so layers do not get visually
+    // entangled. The first group can claim its own page right after the
+    // header; subsequent groups always break.
+    if (gi === 0) doc.addPage(); else doc.addPage();
+    let y = MARGIN + 4;
+
+    doc.setFont("helvetica", "bold");
+    doc.setFontSize(13);
+    doc.setTextColor(124, 45, 54);
+    doc.text(group.title, MARGIN, y);
+    y += 5;
+
+    if (group.caption) {
+      doc.setFont("helvetica", "italic");
+      doc.setFontSize(8);
+      doc.setTextColor(110);
+      const lines = doc.splitTextToSize(group.caption, PAGE_W - 2 * MARGIN);
+      doc.text(lines, MARGIN, y);
+      y += lines.length * 3.5 + 2;
+    }
+
+    doc.setDrawColor(220);
+    doc.setLineWidth(0.2);
+    doc.line(MARGIN, y, PAGE_W - MARGIN, y);
+    y += 4;
+
+    if (group.images && group.images.length > 0) {
+      doc.setFont("helvetica", "bold");
+      doc.setFontSize(10);
+      doc.setTextColor(60);
+      doc.text("Samples", MARGIN, y);
+      y = drawImages(doc, y + 2, group.images);
+    }
+
+    if (group.tables && group.tables.length > 0) {
+      for (const section of group.tables) {
+        y = ensureSpace(doc, y, 18);
+        doc.setFont("helvetica", "bold");
+        doc.setFontSize(11);
+        doc.setTextColor(60);
+        doc.text(section.title, MARGIN, y);
+        y += 4;
+
+        if (section.caption) {
+          doc.setFont("helvetica", "italic");
+          doc.setFontSize(8);
+          doc.setTextColor(110);
+          const lines = doc.splitTextToSize(section.caption, PAGE_W - 2 * MARGIN);
+          doc.text(lines, MARGIN, y);
+          y += lines.length * 3.5 + 1;
+        }
+
+        y = drawTable(doc, y, section.table);
+        y += 4;
+      }
+    }
+  });
 }
 
 function drawGlossary(doc: jsPDF, entries: PdfGlossaryEntry[]): void {
@@ -217,16 +301,20 @@ export function buildPdf(payload: PdfDoc): jsPDF {
   const doc = new jsPDF({ unit: "mm", format: "a4" });
   let y = drawHeader(doc, payload.meta);
   if (payload.table) y = drawTable(doc, y, payload.table);
-  if (payload.images && payload.images.length > 0) {
-    y = ensureSpace(doc, y, 60);
-    doc.setFont("helvetica", "bold");
-    doc.setFontSize(10);
-    doc.setTextColor(60);
-    doc.text("Samples", MARGIN, y);
-    drawImages(doc, y + 2, payload.images);
-  }
-  if (payload.appendix && payload.appendix.length > 0) {
-    drawAppendix(doc, payload.appendix);
+  if (payload.groups && payload.groups.length > 0) {
+    drawGroups(doc, payload.groups);
+  } else {
+    if (payload.images && payload.images.length > 0) {
+      y = ensureSpace(doc, y, 60);
+      doc.setFont("helvetica", "bold");
+      doc.setFontSize(10);
+      doc.setTextColor(60);
+      doc.text("Samples", MARGIN, y);
+      drawImages(doc, y + 2, payload.images);
+    }
+    if (payload.appendix && payload.appendix.length > 0) {
+      drawAppendix(doc, payload.appendix);
+    }
   }
   if (payload.glossary && payload.glossary.length > 0) {
     drawGlossary(doc, payload.glossary);

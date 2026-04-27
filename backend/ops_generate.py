@@ -36,12 +36,18 @@ def run(req: GenerateRequest, session_state) -> dict[str, Any]:
     pipe = session_state.pipeline
     generator = torch.Generator(device=session_state.device).manual_seed(req.seed)
 
+    # Clamp steps to the scheduler's training-timestep ceiling, matching the
+    # defence in ops_trajectory.py. Past num_train_timesteps - 1 the
+    # alphas_cumprod table is out of bounds.
+    scheduler_max = getattr(pipe.scheduler.config, "num_train_timesteps", 1000)
+    safe_steps = max(1, min(int(req.steps), int(scheduler_max) - 1))
+
     started = time.time()
     try:
         out = pipe(
             prompt=req.prompt,
             negative_prompt=req.negativePrompt,
-            num_inference_steps=req.steps,
+            num_inference_steps=safe_steps,
             guidance_scale=req.cfg,
             width=req.width,
             height=req.height,

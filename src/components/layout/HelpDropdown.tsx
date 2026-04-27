@@ -15,6 +15,10 @@ const HELP_SECTIONS: HelpSection[] = [
     content: "A diffusion model generates an image by reversing a noise process. It starts with pure noise and, over a fixed number of steps, denoises that noise into a coherent image. At each step the model predicts what to remove, conditioned on a text prompt. The trajectory through this denoising process is the object of study for Diffusion Atlas: the same final image can be reached by very different paths, and what the model 'decides' along the way is often more revealing than the picture it ends on.",
   },
   {
+    title: "What is a tensor?",
+    content: "Almost everything Diffusion Atlas observes is a tensor. A tensor is a multi-dimensional array of numbers with a fixed shape and a fixed numeric type (dtype). The shape tells you how the numbers are arranged. A 0-D tensor is a single number (a scalar). A 1-D tensor is a flat list (for example a CLIP text embedding of shape [768]). A 2-D tensor is a grid (a matrix, rows × columns). The latents this app traces are 4-D tensors of shape [batch, channels, height, width], typically [1, 4, 64, 64] for SD 1.5 at 512×512. That works out as one image, four latent channels, a 64×64 spatial grid, 16,384 individual floats per latent. Each step of a diffusion run produces one such tensor, and the trajectory is a sequence of them.\n\nA note on terminology. PyTorch and most ML code use \"vector\" to mean specifically a 1-D tensor. In this work I use \"vector\" in the broader mathematical sense, an element of a vector space, where every fixed-shape tensor is a vector regardless of how many axes it has. A 4-D diffusion latent of shape [1, 4, 64, 64] is, on this usage, a vector, because the set of all such tensors forms a vector space. The shape is just how you address the entries. The kind of object is the same.\n\nTensors carry a dtype (fp32, fp16, bf16, int8) which sets the precision of each number, and a device (cpu, cuda, mps) which sets where the numbers live. Changing dtype is not free: fp16 saves memory but introduces NaN bugs in older SD models on Apple Silicon, which is why the backend picks bfloat16 or fp32 per model. Changing device requires copying the tensor, and each .item() call in Python forces a host-device sync.\n\nTensors are not metaphors. They are the things that make up everything in this toolkit. The vector space is the set of all possible 4×64×64 fp32 tensors, and any one such tensor is a vector in that space. The manifold is the learned subset of vectors that the model treats as meaningful.",
+  },
+  {
     title: "Vector space, manifold, latent: three terms, kept separate",
     content: "Diffusion Atlas distinguishes three things that the industry term 'latent space' tends to elide. (1) Vector space — the materially-grained substrate. For SD 1.5 at 512×512 it is a 4×64×64 tensor of fp32 floats. The dimensions, the dtype, the VAE scaling factor (the magic number 0.18215) are training-and-hardware decisions, not properties of meaning. (2) Manifold — the learned geometric surface within the vector space, the Formbestimmung that the denoising network knows how to navigate. The manifold is what makes 'a courtroom without a judge' get rendered with a judge: not a fact about the substrate, a fact about the surface trained into it. (3) Latent — a single tensor in motion within the vector space, the per-step intermediate the U-Net is denoising. Plural noun, not a place. The separation is doing critical work: 'latent space' as a single term hides which of the three you're talking about, and therefore hides whether what you're observing is the substrate (a hardware contingency), the manifold (an ideological one), or a single latent in motion (a moment in a process).",
   },
@@ -169,9 +173,9 @@ export function HelpDropdown() {
                   </button>
                   {expandedSection === i && (
                     <div className="px-4 pb-4 pl-10">
-                      <p className="font-body text-body-sm text-slate leading-relaxed">
+                      <div className="font-body text-body-sm text-slate leading-relaxed space-y-2 whitespace-pre-line">
                         {section.content}
-                      </p>
+                      </div>
                       {section.link && (
                         <p className="mt-2">
                           <a

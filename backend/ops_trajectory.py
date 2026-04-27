@@ -145,6 +145,11 @@ def stream(req: TrajectoryRequest, session_state) -> StreamingResponse:
 
     def worker() -> None:
         try:
+            # Defensive: clamp steps to the scheduler's training-timestep
+            # ceiling (typically 1000 for SD). Past that the model's
+            # alphas_cumprod table goes out of bounds with the cryptic
+            # "index 1001 out of bounds for dimension 0 with size 1000".
+            requested_steps = int(req.steps)
             # 1. Load model. First request can take 1–2 minutes (download +
             # MPS warm-up); emit a heartbeat so the client knows what's up.
             already_loaded = (
@@ -167,12 +172,17 @@ def stream(req: TrajectoryRequest, session_state) -> StreamingResponse:
 
             pipe_local = session_state.pipeline
             device_local = session_state.device
+
+            # Clamp inference steps to training-timestep count - 1.
+            scheduler_max = getattr(pipe_local.scheduler.config, "num_train_timesteps", 1000)
+            safe_steps = max(1, min(requested_steps, int(scheduler_max) - 1))
+
             generator = torch.Generator(device=device_local).manual_seed(int(req.seed))
             started = time.time()
             out = pipe_local(
                 prompt=req.prompt,
                 negative_prompt=req.negativePrompt,
-                num_inference_steps=int(req.steps),
+                num_inference_steps=safe_steps,
                 guidance_scale=float(req.cfg),
                 width=int(req.width),
                 height=int(req.height),

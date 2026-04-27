@@ -1,10 +1,11 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { UMAP } from "umap-js";
-import { X, Plus } from "lucide-react";
-import { useSettings } from "@/context/DiffusionSettingsContext";
+import { X, Plus, Lock, Unlock } from "lucide-react";
+import { useSettings, effectiveSteps } from "@/context/DiffusionSettingsContext";
 import { useImageBlobCache } from "@/context/ImageBlobCacheContext";
+import { useBackendHealth } from "@/context/BackendHealthContext";
 import { saveRun } from "@/lib/cache/runs";
 import { pca3D, type Point3 } from "@/lib/geometry/pca";
 import { TrajectoryThree } from "@/components/viz/TrajectoryThree";
@@ -12,11 +13,16 @@ import type { Run, RunSampleRef } from "@/types/run";
 import { DeepDive } from "@/components/shared/DeepDive";
 import { Table } from "@/components/shared/Table";
 import { ExportButtons } from "@/components/shared/ExportButtons";
-import { CameraRoll } from "@/components/shared/CameraRoll";
+import { CameraRoll, FrameModal, type CameraRollEntry } from "@/components/shared/CameraRoll";
 import { downloadCsv } from "@/lib/export/csv";
 import { downloadPdf } from "@/lib/export/pdf";
 import { downloadJson } from "@/lib/export/json";
+import { computeImageStats } from "@/lib/image/stats";
+import { downloadSvg, escXml } from "@/lib/export/svg";
+import { Download } from "lucide-react";
 import { lookup as lookupTerm, termsFor } from "@/lib/docs/glossary";
+import { PromptChips, STARTER_PRESETS } from "@/components/shared/PromptChips";
+import { RandomSeedButton, nextSeed, type SeedMode } from "@/components/shared/RandomSeedButton";
 
 type ProjectionKind = "pca" | "umap" | "film";
 
@@ -27,6 +33,13 @@ interface TrajectoryLayer {
   label: string;
   colour: string;
   visible: boolean;
+  /**
+   * `false` = a temporary layer that will be replaced by the next run.
+   * `true`  = the user has locked this layer in place; subsequent runs
+   *           leave it alone and add their own (initially temporary)
+   *           layer alongside it.
+   */
+  locked: boolean;
   prompt: string;
   seed: number;
   steps: number;
@@ -43,6 +56,49 @@ interface TrajectoryLayer {
 }
 
 const LAYER_COLOURS = ["#7c2d36", "#c9a227", "#2e5d8a", "#3b7d4f", "#8a3b6e", "#5e5e5e"];
+
+/**
+ * Canonical diffusion-model resolutions. Multiples of 64, covering the
+ * sizes the major SD/SDXL/FLUX/SD3 checkpoints were actually trained at.
+ * Free-form pixel input is unhelpful — typing 517 just produces a broken
+ * image. The annotations remind the user which models match each size.
+ */
+// Bare numeric labels keep the dropdown narrow enough to sit on the same
+// row as Seed / Steps / CFG / Preview every. The hint text (which model
+// each size matches) lives on each option's `title` attribute and on the
+// "native" badge in the field label.
+const DIFFUSION_SIZES: Array<{ value: number; label: string; hint?: string }> = [
+  { value: 256, label: "256", hint: "small / preview" },
+  { value: 384, label: "384" },
+  { value: 512, label: "512", hint: "SD 1.5 / 2.0" },
+  { value: 640, label: "640" },
+  { value: 768, label: "768", hint: "SD 2.x" },
+  { value: 896, label: "896", hint: "SDXL aspect" },
+  { value: 1024, label: "1024", hint: "SDXL / FLUX / SD 3" },
+  { value: 1152, label: "1152", hint: "SDXL aspect" },
+  { value: 1280, label: "1280" },
+  { value: 1536, label: "1536" },
+  { value: 2048, label: "2048", hint: "large" },
+];
+
+/**
+ * Builds the dropdown option list with the loaded model's native size
+ * marked with a ★. If the native size is not in the canonical list
+ * (uncommon, but possible — e.g. a fine-tune trained at 720) it is
+ * inserted in the right sort position so the user can still pick it.
+ */
+function dimensionOptions(native: number | null): Array<{ value: number; label: string; hint?: string }> {
+  const merged = [...DIFFUSION_SIZES];
+  if (native && !merged.some((s) => s.value === native)) {
+    merged.push({ value: native, label: String(native), hint: "model native" });
+    merged.sort((a, b) => a.value - b.value);
+  }
+  return merged.map((s) =>
+    native && s.value === native
+      ? { value: s.value, label: `★ ${s.label}`, hint: s.hint ? `${s.hint} · native` : "native" }
+      : s,
+  );
+}
 
 function nextColour(i: number): string {
   return LAYER_COLOURS[i % LAYER_COLOURS.length];
@@ -91,18 +147,64 @@ function dataUrlToBlob(dataUrl: string): Blob {
 export function DenoiseTrajectory() {
   const { settings, setSettingsOpen } = useSettings();
   const { set: cacheImage } = useImageBlobCache();
+  const { report: healthReport } = useBackendHealth();
+  const nativeWidth = healthReport?.nativeWidth ?? null;
+  const nativeHeight = healthReport?.nativeHeight ?? null;
+  // Track whether the user has manually picked a size so we don't clobber
+  // their choice every time the model changes (or every poll).
+  const [userSetSize, setUserSetSize] = useState(false);
 
   const [prompt, setPrompt] = useState("a cat sitting on a wooden chair, photorealistic");
   const [seed, setSeed] = useState(42);
-  const [steps, setSteps] = useState(20);
+  // Seed mode: "off" leaves the seed alone; "shuffle" rolls a random seed
+  // before each run; "increment" bumps the seed by +1 before each run.
+  // The dice icon animates differently per mode so the user can see at a
+  // glance which kind of roll happened.
+  const [seedMode, setSeedMode] = useState<SeedMode>("off");
+  const [seedSpinning, setSeedSpinning] = useState(false);
+  // 12 is the modern "fast and good" sweet spot for SD 1.5 with the
+  // DPMSolverMultistepScheduler ("DPM++ 2M Karras") the backend pins —
+  // converges noticeably faster than Euler or PNDM, so 12 steps now
+  // produces a coherent image where 12 with Euler would be mushy. Bump
+  // to 20-30 for research-grade fidelity once you know what you're after.
+  const [steps, setSteps] = useState(12);
   const [cfg, setCfg] = useState(7.5);
 
-  const [previewEvery, setPreviewEvery] = useState(4);
-  const [projection, setProjection] = useState<ProjectionKind>("pca");
+  const [previewEvery, setPreviewEvery] = useState(1);
+  const [selectedStep, setSelectedStep] = useState<number | null>(null);
+
+  // Film is the default — most intuitive read of a trajectory for a researcher
+  // unfamiliar with PCA/UMAP. PCA and UMAP remain one click away.
+  // (Set in the projection state initialisation below.)
+  const [projection, setProjection] = useState<ProjectionKind>("film");
+  // PCA/UMAP thumbnail density. 1 = every step, higher = thinned. Lets the
+  // user clear the swarm of mid-trajectory thumbnails so the curve itself
+  // is legible. Defaults to a sensible "every other" so dense runs aren't
+  // overwhelming on first render.
+  const [thumbStride, setThumbStride] = useState(4);
   // SD 1.5 was trained at 512×512 — running it at 1024 produces black images.
-  // SDXL and FLUX want 1024. Default to 512 here since the local default is SD 1.5.
+  // SDXL and FLUX want 1024. Default to 512 as a safe pre-handshake guess;
+  // a useEffect below snaps to the loaded model's native size as soon as
+  // /health reports it (and resets when the model changes), unless the user
+  // has manually picked a size.
   const [width, setWidth] = useState(512);
   const [height, setHeight] = useState(512);
+
+  // Snap width/height to the model's native resolution as soon as the
+  // backend reports it. Reset on model change so a fresh model gets its
+  // own native default. Honours `userSetSize` so manual choices stick.
+  useEffect(() => {
+    if (!nativeWidth || !nativeHeight) return;
+    if (userSetSize) return;
+    setWidth(nativeWidth);
+    setHeight(nativeHeight);
+  }, [nativeWidth, nativeHeight, userSetSize]);
+
+  // Reset the manual-override flag when the loaded model changes — a new
+  // checkpoint should snap to its own native default once /health updates.
+  useEffect(() => {
+    setUserSetSize(false);
+  }, [healthReport?.currentModelId]);
 
   const [running, setRunning] = useState(false);
   const [progress, setProgress] = useState<{ done: number; total: number } | null>(null);
@@ -146,6 +248,23 @@ export function DenoiseTrajectory() {
       return;
     }
 
+    // Drop any existing unlocked (temporary) layer — a fresh run
+    // replaces the previous temp result. Locked layers are untouched.
+    setSavedLayers((prev) => prev.filter((l) => l.locked));
+
+    // Apply the seed mode (shuffle / increment / off) and let the dice
+    // animate briefly so the user sees the change before the request
+    // fires. The freshly-derived value is used directly in the request
+    // body — `seed` from the closure is stale until React re-renders.
+    let activeSeed = seed;
+    if (seedMode !== "off") {
+      activeSeed = nextSeed(seedMode, seed);
+      setSeed(activeSeed);
+      setSeedSpinning(true);
+      await new Promise((r) => setTimeout(r, 450));
+      setSeedSpinning(false);
+    }
+
     setRunning(true);
     setError(null);
     setProgress(null);
@@ -165,8 +284,8 @@ export function DenoiseTrajectory() {
         body: JSON.stringify({
           modelId: settings.modelId,
           prompt,
-          seed,
-          steps,
+          seed: activeSeed,
+          steps: effectiveSteps(steps, settings),
           cfg,
           width,
           height,
@@ -215,6 +334,9 @@ export function DenoiseTrajectory() {
           } else if (event.event === "step") {
             collected.push(decodeLatent(event.latentB64));
             collectedPreviews.push(event.previewDataUrl ?? null);
+            // Track the latest step as the selected one during streaming so
+            // the slider follows the live preview in real time.
+            setSelectedStep(event.step - 1);
             collectedStats.push({
               step: event.step,
               totalSteps: event.totalSteps,
@@ -258,50 +380,67 @@ export function DenoiseTrajectory() {
 
     if (finalUrl) {
       setFinalImage(finalUrl);
-      const imageKey = `traj::local::${settings.modelId}::${seed}::${steps}::${cfg}::${Date.now()}`;
-      await cacheImage(imageKey, dataUrlToBlob(finalUrl));
+      const imageKey = `traj::local::${settings.modelId}::${activeSeed}::${steps}::${cfg}::${Date.now()}`;
+      // IDB writes can fail (connection closing during HMR, version-change
+      // race, quota exceeded) — log and continue so the auto-save-as-layer
+      // below still runs. The final image is also kept in the temp layer's
+      // `finalImage` field, so it's not lost on a cache miss.
+      try {
+        await cacheImage(imageKey, dataUrlToBlob(finalUrl));
 
-      const samples: RunSampleRef[] = [{ imageKey, variable: "final", responseTimeMs: respMs ?? undefined }];
-      const run: Run = {
-        id: `traj::${Date.now()}`,
-        kind: "single",
-        createdAt: new Date().toISOString(),
-        providerId: "local",
-        modelId: settings.modelId,
+        const samples: RunSampleRef[] = [{ imageKey, variable: "final", responseTimeMs: respMs ?? undefined }];
+        const run: Run = {
+          id: `traj::${Date.now()}`,
+          kind: "single",
+          createdAt: new Date().toISOString(),
+          providerId: "local",
+          modelId: settings.modelId,
+          prompt,
+          seed: activeSeed,
+          steps,
+          cfg,
+          width: settings.defaults.width,
+          height: settings.defaults.height,
+          samples,
+          extra: { trajectory: true, stepCount: collected.length },
+        };
+        await saveRun(run);
+      } catch (err) {
+        console.warn("Trajectory cache write failed (continuing):", err);
+      }
+    }
+
+    // Auto-save the just-finished run as a temporary (unlocked) layer.
+    // It will be replaced if the user runs again, unless they lock it
+    // first. Computes its own projection so the layer is renderable
+    // without depending on the live state vars.
+    if (collected.length >= 2 && finalUrl) {
+      const newLayer: TrajectoryLayer = {
+        id: `layer-${Date.now()}`,
+        label: `${prompt.slice(0, 32)}${prompt.length > 32 ? "…" : ""} · seed ${activeSeed}`,
+        // Temporary layers always use a neutral ink colour so locked
+        // layers retain their bright palette colours.
+        colour: "#1a1a1a",
+        visible: true,
+        locked: false,
         prompt,
-        seed,
+        seed: activeSeed,
         steps,
         cfg,
-        width: settings.defaults.width,
-        height: settings.defaults.height,
-        samples,
-        extra: { trajectory: true, stepCount: collected.length },
+        width,
+        height,
+        modelId: settings.modelId,
+        latents: collected.slice(),
+        previews: collectedPreviews.slice(),
+        stepStats: collectedStats.slice(),
+        finalImage: finalUrl,
+        responseTimeMs: respMs,
+        points: pca3D(collected),
       };
-      await saveRun(run);
+      setSavedLayers((prev) => [newLayer, ...prev.filter((l) => l.locked)]);
     }
 
     setRunning(false);
-  }
-
-  function saveCurrentAsLayer() {
-    if (latents.length === 0) return;
-    const id = `layer-${Date.now()}`;
-    const idx = savedLayers.length;
-    const layer: TrajectoryLayer = {
-      id,
-      label: `${prompt.slice(0, 32)}${prompt.length > 32 ? "…" : ""} · seed ${seed}`,
-      colour: nextColour(idx),
-      visible: true,
-      prompt, seed, steps, cfg, width, height,
-      modelId: settings.modelId,
-      latents: latents.slice(),
-      previews: previews.slice(),
-      stepStats: stepStats.slice(),
-      finalImage,
-      responseTimeMs,
-      points: points.slice(),
-    };
-    setSavedLayers((prev) => [...prev, layer]);
   }
 
   function updateLayer(id: string, patch: Partial<TrajectoryLayer>) {
@@ -312,15 +451,39 @@ export function DenoiseTrajectory() {
     setSavedLayers((prev) => prev.filter((l) => l.id !== id));
   }
 
-  // Build the "active" layer (the most recent run, possibly still in flight)
-  // so render and deep-dive code can treat it the same as saved layers.
+  /**
+   * Lock a layer in place: gives it a stable colour from the palette so
+   * future temp runs (which use neutral ink) don't visually clash, and
+   * flips its `locked` flag.
+   */
+  function lockLayer(id: string) {
+    setSavedLayers((prev) => {
+      // Pick the next palette colour based on how many already-locked
+      // layers we have, so colours cycle predictably.
+      const lockedCount = prev.filter((l) => l.locked).length;
+      return prev.map((l) =>
+        l.id === id ? { ...l, locked: true, colour: nextColour(lockedCount) } : l,
+      );
+    });
+  }
+
+  function unlockLayer(id: string) {
+    setSavedLayers((prev) => prev.map((l) => (l.id === id ? { ...l, locked: false, colour: "#1a1a1a" } : l)));
+  }
+
+  // The in-flight run is rendered from transient state so the user sees
+  // partial latents/previews as they stream. Once `running` flips to
+  // false the auto-save in run() has already snapshotted the result into
+  // savedLayers as `locked: false`, so we drop the activeLayer at that
+  // point to avoid duplicating it on screen.
   const activeLayer: TrajectoryLayer | null =
-    latents.length > 0
+    running && latents.length > 0
       ? {
           id: "active",
           label: "active run",
           colour: "#1a1a1a",
           visible: true,
+          locked: false,
           prompt, seed, steps, cfg, width, height,
           modelId: settings.modelId,
           latents,
@@ -332,9 +495,13 @@ export function DenoiseTrajectory() {
         }
       : null;
 
+  // Newest-first: while a run is streaming the in-flight activeLayer
+  // sits at the top; once the run completes it has already been
+  // snapshotted into savedLayers (as the unlocked / temporary entry at
+  // the head), so we just render savedLayers in their existing order.
   const visibleLayers = [
-    ...savedLayers.filter((l) => l.visible),
     ...(activeLayer ? [activeLayer] : []),
+    ...savedLayers.filter((l) => l.visible),
   ];
 
   return (
@@ -361,8 +528,8 @@ export function DenoiseTrajectory() {
       )}
 
       <div className="grid grid-cols-1 gap-3 mb-4">
-        <label className="block">
-          <span className="font-sans text-caption uppercase tracking-wider text-muted-foreground">Prompt</span>
+        <label className="block" title={lookupTerm("Prompt")}>
+          <span className="font-sans text-caption uppercase tracking-wider text-muted-foreground cursor-help underline decoration-dotted decoration-muted-foreground/40 underline-offset-4">Prompt</span>
           <input
             type="text"
             value={prompt}
@@ -370,15 +537,30 @@ export function DenoiseTrajectory() {
             className="input-editorial mt-1"
           />
         </label>
-        <div className="grid grid-cols-4 gap-3">
+        <PromptChips active={prompt} presets={STARTER_PRESETS} onPick={setPrompt} />
+        <div
+          className="grid gap-2"
+          style={{
+            gridTemplateColumns:
+              "minmax(220px, 1.6fr) 72px 72px 88px minmax(108px, 1fr) minmax(108px, 1fr)",
+          }}
+        >
           <label className="block" title={lookupTerm("Seed")}>
             <span className="font-sans text-caption uppercase tracking-wider text-muted-foreground cursor-help underline decoration-dotted decoration-muted-foreground/40 underline-offset-4">Seed</span>
-            <input
-              type="number"
-              value={seed}
-              onChange={(e) => setSeed(parseInt(e.target.value, 10) || 0)}
-              className="input-editorial mt-1"
-            />
+            <div className="flex items-stretch gap-1 mt-1">
+              <input
+                type="number"
+                value={seed}
+                onChange={(e) => setSeed(parseInt(e.target.value, 10) || 0)}
+                className="input-editorial flex-1 min-w-0"
+              />
+              <RandomSeedButton
+                onPick={setSeed}
+                mode={seedMode}
+                onModeChange={setSeedMode}
+                spinning={seedSpinning}
+              />
+            </div>
           </label>
           <label className="block" title={lookupTerm("Steps")}>
             <span className="font-sans text-caption uppercase tracking-wider text-muted-foreground cursor-help underline decoration-dotted decoration-muted-foreground/40 underline-offset-4">Steps</span>
@@ -391,8 +573,8 @@ export function DenoiseTrajectory() {
               className="input-editorial mt-1"
             />
           </label>
-          <label className="block">
-            <span className="font-sans text-caption uppercase tracking-wider text-muted-foreground">CFG</span>
+          <label className="block" title={lookupTerm("CFG")}>
+            <span className="font-sans text-caption uppercase tracking-wider text-muted-foreground cursor-help underline decoration-dotted decoration-muted-foreground/40 underline-offset-4">CFG</span>
             <input
               type="number"
               step="0.5"
@@ -401,7 +583,7 @@ export function DenoiseTrajectory() {
               className="input-editorial mt-1"
             />
           </label>
-          <label className="block" title="Decode a thumbnail every N steps. 0 disables previews. Each thumbnail adds one VAE decode.">
+          <label className="block" title="Decode a thumbnail every N steps. 1 = capture every step (richer Deep Dive + step scrubber, ~0.5s extra per step). 0 disables previews entirely. Higher values make the run faster at the cost of less data in the inspector.">
             <span className="font-sans text-caption uppercase tracking-wider text-muted-foreground cursor-help underline decoration-dotted decoration-muted-foreground/40 underline-offset-4">Preview every</span>
             <input
               type="number"
@@ -412,31 +594,33 @@ export function DenoiseTrajectory() {
               className="input-editorial mt-1"
             />
           </label>
-        </div>
-        <div className="grid grid-cols-2 gap-3">
-          <label className="block" title="Image width in pixels. SD 1.5 was trained at 512; SDXL / FLUX expect 1024. Mismatched sizes produce black images.">
-            <span className="font-sans text-caption uppercase tracking-wider text-muted-foreground cursor-help underline decoration-dotted decoration-muted-foreground/40 underline-offset-4">Width</span>
-            <input
-              type="number"
-              step={64}
-              min={256}
-              max={2048}
+          <label className="block" title="Image width in pixels. Snaps to the loaded model's native resolution (derived from unet/transformer sample_size × VAE scale factor) as soon as the backend reports it. Off-native sizes are kept available for SDXL aspect-ratio bucketing and experimentation, but produce black or distorted output on most checkpoints.">
+            <span className="font-sans text-caption uppercase tracking-wider text-muted-foreground cursor-help underline decoration-dotted decoration-muted-foreground/40 underline-offset-4 whitespace-nowrap">
+              W{nativeWidth ? <span className="ml-1 normal-case tracking-normal text-burgundy">· {nativeWidth}★</span> : null}
+            </span>
+            <select
               value={width}
-              onChange={(e) => setWidth(parseInt(e.target.value, 10) || 512)}
+              onChange={(e) => { setWidth(parseInt(e.target.value, 10)); setUserSetSize(true); }}
               className="input-editorial mt-1"
-            />
+            >
+              {dimensionOptions(nativeWidth).map((s) => (
+                <option key={s.value} value={s.value} title={s.hint ?? undefined}>{s.label}</option>
+              ))}
+            </select>
           </label>
-          <label className="block" title="Image height in pixels. Match Width and the model's training resolution.">
-            <span className="font-sans text-caption uppercase tracking-wider text-muted-foreground cursor-help underline decoration-dotted decoration-muted-foreground/40 underline-offset-4">Height</span>
-            <input
-              type="number"
-              step={64}
-              min={256}
-              max={2048}
+          <label className="block" title="Image height in pixels. Match Width and the model's training resolution unless you are exploring SDXL aspect-ratio buckets.">
+            <span className="font-sans text-caption uppercase tracking-wider text-muted-foreground cursor-help underline decoration-dotted decoration-muted-foreground/40 underline-offset-4 whitespace-nowrap">
+              H{nativeHeight ? <span className="ml-1 normal-case tracking-normal text-burgundy">· {nativeHeight}★</span> : null}
+            </span>
+            <select
               value={height}
-              onChange={(e) => setHeight(parseInt(e.target.value, 10) || 512)}
+              onChange={(e) => { setHeight(parseInt(e.target.value, 10)); setUserSetSize(true); }}
               className="input-editorial mt-1"
-            />
+            >
+              {dimensionOptions(nativeHeight).map((s) => (
+                <option key={s.value} value={s.value} title={s.hint ?? undefined}>{s.label}</option>
+              ))}
+            </select>
           </label>
         </div>
       </div>
@@ -444,12 +628,23 @@ export function DenoiseTrajectory() {
       {savedLayers.length > 0 && (
         <div className="border border-parchment rounded-sm bg-cream/20 p-3 mb-4">
           <h3 className="font-sans text-caption uppercase tracking-wider text-muted-foreground mb-2">
-            Layers · {savedLayers.length} saved
-            <span className="ml-2 italic normal-case tracking-normal">toggle, rename, or remove. Visible layers overlay in the 3D / Film views.</span>
+            Layers · {savedLayers.filter((l) => l.locked).length} locked
+            {savedLayers.some((l) => !l.locked) && <span className="ml-1">· 1 temp</span>}
+            <span className="ml-2 italic normal-case tracking-normal">
+              click the padlock to keep a temp layer; locked layers stay through future runs.
+            </span>
           </h3>
           <div className="space-y-1.5">
             {savedLayers.map((layer) => (
-              <div key={layer.id} className="flex items-center gap-2 text-caption">
+              <div
+                key={layer.id}
+                className={
+                  "flex items-center gap-2 text-caption rounded-sm " +
+                  (layer.locked
+                    ? ""
+                    : "border border-dashed border-parchment-dark bg-cream/40 px-1 py-0.5")
+                }
+              >
                 <input
                   type="checkbox"
                   checked={layer.visible}
@@ -459,17 +654,33 @@ export function DenoiseTrajectory() {
                 <span
                   className="inline-block w-3 h-3 rounded-full flex-shrink-0"
                   style={{ background: layer.colour }}
-                  title="Layer colour"
+                  title={layer.locked ? "Locked layer · stays across runs" : "Temporary layer · will be replaced by the next run"}
                 />
                 <input
                   type="text"
                   value={layer.label}
                   onChange={(e) => updateLayer(layer.id, { label: e.target.value })}
-                  className="input-editorial py-0.5 text-caption flex-1 min-w-0"
+                  className={"input-editorial py-0.5 text-caption flex-1 min-w-0" + (layer.locked ? "" : " italic")}
                 />
                 <span className="font-sans text-caption text-muted-foreground">
+                  {!layer.locked && <span className="text-burgundy not-italic mr-2 font-medium uppercase tracking-wider text-[10px]">temp</span>}
                   {layer.latents.length} steps · seed {layer.seed} · {layer.modelId.split("/").pop()}
                 </span>
+                <button
+                  onClick={() => (layer.locked ? unlockLayer(layer.id) : lockLayer(layer.id))}
+                  className={
+                    layer.locked
+                      ? "btn-editorial-ghost p-1 text-burgundy"
+                      : "btn-editorial-ghost p-1 text-muted-foreground hover:text-burgundy"
+                  }
+                  title={layer.locked
+                    ? "Locked: this layer stays across future runs · click to unlock (will be removed on next run)"
+                    : "Temporary: this layer will be replaced by the next run · click to lock it in place"}
+                  aria-pressed={layer.locked}
+                  aria-label={layer.locked ? "Unlock layer" : "Lock layer"}
+                >
+                  {layer.locked ? <Lock size={12} /> : <Unlock size={12} />}
+                </button>
                 <button
                   onClick={() => deleteLayer(layer.id)}
                   className="btn-editorial-ghost p-1"
@@ -501,18 +712,6 @@ export function DenoiseTrajectory() {
               : `Streaming step ${progress?.done ?? 0}/${progress?.total ?? steps}…`
             : `Run trajectory (${steps} steps)`}
         </button>
-        {latents.length > 0 && !running && (
-          <button
-            onClick={saveCurrentAsLayer}
-            className="btn-editorial-secondary px-3 py-2 flex items-center gap-1"
-            title="Save the current run as a comparison layer. Run another prompt and they will overlay in the 3D / Film views."
-          >
-            <Plus size={14} /> Save as layer
-          </button>
-        )}
-        <span className="font-sans text-caption text-muted-foreground">
-          {settings.backend === "local" ? "Local" : "Hosted"} · {settings.providerId} · {settings.modelId}
-        </span>
       </div>
 
       {error && (
@@ -560,13 +759,25 @@ export function DenoiseTrajectory() {
           <p className="font-sans text-caption italic text-muted-foreground mb-2">
             PCA and UMAP show different curves because they answer different questions. PCA is a linear projection onto the three directions of greatest variance, so it preserves <em>global</em> distances — long stretches of the trajectory keep their relative scale. UMAP is a non-linear method that preserves <em>local</em> neighbourhood structure at the cost of distorting global distances — it can pull apart steps that PCA bunches together when they sit on different parts of a curved surface. Same trajectory, two views: PCA reads it as a path, UMAP reads it as a topology. Disagreement between them is itself a finding about the manifold's local curvature.
           </p>
+
+          {/* Step scrubber: drag to retrospectively inspect any step. */}
+          {latents.length > 1 && (
+            <StepScrubber
+              total={latents.length}
+              selected={selectedStep ?? latents.length - 1}
+              onChange={setSelectedStep}
+              previews={previews}
+              stepStats={stepStats}
+              cfg={cfg}
+            />
+          )}
           {projection === "film" && visibleLayers.length > 0 ? (
             <div className="space-y-3">
               {visibleLayers.map((l) => (
                 <div key={l.id}>
                   {visibleLayers.length > 1 && (
-                    <div className="font-sans text-caption text-muted-foreground mb-1 flex items-center gap-2">
-                      <span className="inline-block w-3 h-3 rounded-full flex-shrink-0" style={{ background: l.colour }} />
+                    <div className="font-sans text-[8px] text-muted-foreground mb-1 flex items-center gap-1.5">
+                      <span className="inline-block w-1.5 h-1.5 rounded-full flex-shrink-0" style={{ background: l.colour }} />
                       {l.label}
                     </div>
                   )}
@@ -575,22 +786,45 @@ export function DenoiseTrajectory() {
                     latents={l.latents}
                     stepStats={l.stepStats}
                     cfg={l.cfg}
+                    prompt={l.prompt}
+                    modelId={l.modelId}
+                    seed={l.seed}
                   />
                 </div>
               ))}
             </div>
           ) : visibleLayers.some((l) => l.points.length >= 2) ? (
-            <TrajectoryThree
-              layers={visibleLayers
-                .filter((l) => l.points.length >= 2)
-                .map((l) => ({
-                  id: l.id,
-                  label: l.label,
-                  colour: l.colour,
-                  points: l.points,
-                  previews: l.previews,
-                }))}
-            />
+            <div className="space-y-2">
+              <div className="flex items-center gap-3 px-1">
+                <label className="font-sans text-caption text-muted-foreground flex items-center gap-2 flex-1">
+                  <span className="uppercase tracking-wider whitespace-nowrap" title="Show a preview thumbnail every Nth step. Higher values thin the swarm so the curve is easier to read; the final-step thumbnail is always shown.">
+                    Thumbnails every
+                  </span>
+                  <input
+                    type="range"
+                    min={1}
+                    max={Math.max(1, Math.min(20, latents.length || 1))}
+                    value={thumbStride}
+                    onChange={(e) => setThumbStride(parseInt(e.target.value, 10) || 1)}
+                    className="flex-1 max-w-xs"
+                  />
+                  <span className="font-mono text-foreground w-10 text-right">{thumbStride}</span>
+                  <span className="italic">{thumbStride === 1 ? "every step" : `every ${thumbStride}th step`}</span>
+                </label>
+              </div>
+              <TrajectoryThree
+                previewStride={thumbStride}
+                layers={visibleLayers
+                  .filter((l) => l.points.length >= 2)
+                  .map((l) => ({
+                    id: l.id,
+                    label: l.label,
+                    colour: l.colour,
+                    points: l.points,
+                    previews: l.previews,
+                  }))}
+              />
+            </div>
           ) : (
             <div className="border border-parchment bg-cream/30 p-8 text-center font-sans text-body-sm text-muted-foreground rounded-sm">
               {running ? (
@@ -619,20 +853,6 @@ export function DenoiseTrajectory() {
               ) : (
                 "Need at least 2 steps to render a trajectory."
               )}
-            </div>
-          )}
-          {finalImage && (
-            <div className="mt-4 grid grid-cols-1 sm:grid-cols-[1fr_240px] gap-4 items-start">
-              <dl className="grid grid-cols-[120px_1fr] gap-y-1 font-sans text-caption">
-                <dt className="text-muted-foreground">Provider</dt><dd className="text-foreground">local</dd>
-                <dt className="text-muted-foreground">Model</dt><dd className="text-foreground">{settings.modelId}</dd>
-                <dt className="text-muted-foreground">Seed</dt><dd className="text-foreground">{seed}</dd>
-                <dt className="text-muted-foreground">Steps</dt><dd className="text-foreground">{steps}</dd>
-                <dt className="text-muted-foreground">CFG</dt><dd className="text-foreground">{cfg}</dd>
-                <dt className="text-muted-foreground">Latent dim</dt><dd className="text-foreground">{latents[0]?.length ?? 0}</dd>
-              </dl>
-              {/* eslint-disable-next-line @next/next/no-img-element */}
-              <img src={finalImage} alt="final" className="rounded-sm border border-parchment shadow-editorial w-full" />
             </div>
           )}
         </div>
@@ -722,11 +942,13 @@ function rowsToTableArray(rows: RichStepRow[]): Array<Array<string | number>> {
     r.cosToStart.toFixed(3),
     r.latentMean != null ? r.latentMean.toFixed(3) : "—",
     r.latentStd != null ? r.latentStd.toFixed(3) : "—",
+    r.latentMin != null ? r.latentMin.toFixed(3) : "—",
+    r.latentMax != null ? r.latentMax.toFixed(3) : "—",
     r.preview ? "yes" : "—",
   ]);
 }
 
-const TRAJ_HEADERS = ["step", "timestep", "sigma", "‖z‖", "Δ to prev", "cos→final", "cos→start", "mean", "std", "preview"];
+const TRAJ_HEADERS = ["step", "timestep", "sigma", "‖z‖", "Δ to prev", "cos→final", "cos→start", "mean", "std", "min", "max", "preview"];
 
 function buildCameraEntries(layer: TrajectoryLayer): Array<{
   src: string;
@@ -811,20 +1033,99 @@ function TrajectoryDeepDive({ layers }: TrajectoryDeepDiveProps) {
     });
   }
 
-  function exportPdf() {
-    const images: Array<{ dataUrl: string; caption?: string }> = [];
+  async function exportPdf() {
+    // Compute image stats for every previewed step in every layer. The
+    // computeImageStats helper is cached per dataUrl so re-opening the PDF
+    // export after browsing the camera roll is essentially instant.
+    const imageStatsByLayer: Array<Map<number, Awaited<ReturnType<typeof computeImageStats>>>> = [];
     for (const layer of layers) {
-      layer.previews.forEach((p, i) => {
-        if (p) images.push({ dataUrl: p, caption: `${layer.label} · step ${i + 1}` });
+      const map = new Map<number, Awaited<ReturnType<typeof computeImageStats>>>();
+      const tasks: Array<Promise<void>> = [];
+      layer.previews.forEach((url, i) => {
+        if (!url) return;
+        tasks.push(
+          computeImageStats(url).then((s) => {
+            map.set(i, s);
+          }).catch(() => undefined),
+        );
       });
-      if (layer.finalImage) images.push({ dataUrl: layer.finalImage, caption: `${layer.label} · final` });
+      await Promise.all(tasks);
+      imageStatsByLayer.push(map);
     }
 
-    const appendix = layers.map((layer) => ({
-      title: `Per-step latent geometry · ${layer.label}`,
-      caption: `Prompt: ${layer.prompt} · seed ${layer.seed} · ${layer.steps} steps · CFG ${layer.cfg} · model ${layer.modelId}`,
-      table: { headers: TRAJ_HEADERS, rows: rowsToTableArray(buildRichRows(layer)) },
-    }));
+    const IMG_HEADERS = [
+      "step",
+      "dims",
+      "R", "G", "B",
+      "hue°",
+      "bright",
+      "contrast",
+      "satur.",
+      "entropy",
+      "edges",
+      "centre (x,y)",
+      "HF energy",
+      "PNG bytes",
+    ];
+
+    // One PdfGroup per layer — newest at the top, matching the on-screen
+    // order (the caller already passes layers newest-first). Each group is
+    // self-contained: layer header, its own camera roll, then its
+    // latent-geometry and image-stats tables, all on its own page(s).
+    const groups = layers.map((layer, li) => {
+      const images: Array<{ dataUrl: string; caption?: string }> = [];
+      layer.previews.forEach((p, i) => {
+        if (p) images.push({ dataUrl: p, caption: `step ${i + 1}` });
+      });
+      if (layer.finalImage) images.push({ dataUrl: layer.finalImage, caption: "final" });
+
+      const tables: Array<{ title: string; caption: string; table: { headers: string[]; rows: Array<Array<string | number>> } }> = [];
+      tables.push({
+        title: "Per-step latent geometry",
+        caption: `Prompt: ${layer.prompt} · seed ${layer.seed} · ${layer.steps} steps · CFG ${layer.cfg} · model ${layer.modelId}`,
+        table: { headers: TRAJ_HEADERS, rows: rowsToTableArray(buildRichRows(layer)) },
+      });
+
+      const statsMap = imageStatsByLayer[li];
+      const imgRows: Array<Array<string | number>> = [];
+      layer.previews.forEach((url, i) => {
+        if (!url) return;
+        const s = statsMap.get(i);
+        if (!s) return;
+        imgRows.push([
+          i + 1,
+          `${s.width}×${s.height}`,
+          s.meanR.toFixed(0),
+          s.meanG.toFixed(0),
+          s.meanB.toFixed(0),
+          s.meanHue.toFixed(0),
+          s.meanLuma.toFixed(1),
+          s.stdLuma.toFixed(1),
+          s.saturation.toFixed(3),
+          `${s.entropy.toFixed(2)} bits`,
+          s.edgeDensity.toFixed(3),
+          `(${s.centreX.toFixed(2)}, ${s.centreY.toFixed(2)})`,
+          s.highFreqRatio.toFixed(3),
+          s.pngBytes.toLocaleString(),
+        ]);
+      });
+      if (imgRows.length > 0) {
+        tables.push({
+          title: "Per-step image stats",
+          caption:
+            "Cultural-analytics-style measurements computed in-browser per preview. Mean RGB drift reveals colour bias; entropy falls from ~8 bits (noise) toward 6-7 (structure); edge density typically peaks mid-trajectory; saturation inflates at high CFG; centre-of-mass shows where the model 'decided' the subject sits; HF energy collapses early as diffusion denoises high frequencies first; PNG bytes is a Kolmogorov-complexity proxy.",
+          table: { headers: IMG_HEADERS, rows: imgRows },
+        });
+      }
+
+      return {
+        title: `Layer ${li + 1} · ${layer.label}`,
+        caption: `seed ${layer.seed} · ${layer.steps} steps · CFG ${layer.cfg} · ${layer.latents.length} captured · ${layer.modelId}` +
+          (layer.responseTimeMs !== null ? ` · ${(layer.responseTimeMs / 1000).toFixed(1)}s` : ""),
+        images,
+        tables,
+      };
+    });
 
     const headLayer = layers[0];
     downloadPdf(`${stamp}.pdf`, {
@@ -832,7 +1133,7 @@ function TrajectoryDeepDive({ layers }: TrajectoryDeepDiveProps) {
         title: "Denoise Trajectory",
         subtitle: layers.length === 1
           ? `local · ${headLayer.modelId}`
-          : `${layers.length} layers compared`,
+          : `${layers.length} layers compared (newest first)`,
         fields:
           layers.length === 1
             ? [
@@ -850,9 +1151,12 @@ function TrajectoryDeepDive({ layers }: TrajectoryDeepDiveProps) {
                 ...layers.map((l, i) => ({ label: `Layer ${i + 1}`, value: `${l.label} (${l.latents.length} steps)` })),
               ],
       },
-      images,
-      appendix,
-      glossary: termsFor(["Prompt", "Seed", "Steps", "CFG", "Preview every", "step", "‖z‖", "Δ to prev", "cos→final", "cos→start", "preview"]),
+      groups,
+      glossary: termsFor([
+        "Prompt", "Seed", "Steps", "CFG", "Preview every",
+        "step", "‖z‖", "Δ to prev", "cos→final", "cos→start", "preview",
+        "timestep", "sigma", "mean", "std", "min", "max",
+      ]),
     });
   }
 
@@ -865,10 +1169,10 @@ function TrajectoryDeepDive({ layers }: TrajectoryDeepDiveProps) {
           const cameraEntries = buildCameraEntries(layer);
           return (
             <section key={layer.id} className="space-y-4">
-              <header className="flex items-center gap-3 border-b border-parchment pb-2">
-                <span className="inline-block w-3 h-3 rounded-full flex-shrink-0" style={{ background: layer.colour }} />
-                <h3 className="font-display text-display-md font-bold text-burgundy">{layer.label}</h3>
-                <span className="font-sans text-caption text-muted-foreground ml-auto">
+              <header className="flex items-center gap-2 border-b border-parchment pb-1">
+                <span className="inline-block w-2 h-2 rounded-full flex-shrink-0" style={{ background: layer.colour }} />
+                <h3 className="font-sans text-caption uppercase tracking-wider font-medium text-burgundy">{layer.label}</h3>
+                <span className="font-sans text-[10px] text-muted-foreground ml-auto">
                   {layer.latents.length} steps · seed {layer.seed} · {layer.steps} req · CFG {layer.cfg} · {layer.modelId.split("/").pop()}
                 </span>
               </header>
@@ -893,114 +1197,355 @@ function TrajectoryDeepDive({ layers }: TrajectoryDeepDiveProps) {
 }
 
 /**
+ * Slider + preview panel for retrospectively inspecting any step's image
+ * and stats. Default position is the latest received step; dragging
+ * lets the user scrub backwards and forwards through the trajectory.
+ */
+function StepScrubber({
+  total,
+  selected,
+  onChange,
+  previews,
+  stepStats,
+  cfg,
+}: {
+  total: number;
+  selected: number;
+  onChange: (n: number) => void;
+  previews: Array<string | null>;
+  stepStats: Array<Omit<StepEvent, "event" | "shape" | "latentB64" | "previewDataUrl">>;
+  cfg: number;
+}) {
+  const idx = Math.max(0, Math.min(total - 1, selected));
+  const preview = previews[idx];
+  const stat = stepStats[idx];
+  return (
+    <div className="border border-parchment rounded-sm bg-cream/20 p-3 mb-3 grid grid-cols-1 sm:grid-cols-[60px_1fr] gap-3 items-center">
+      <div className="bg-cream/40 border border-parchment rounded-sm overflow-hidden flex items-center justify-center" style={{ width: "60px", height: "60px" }}>
+        {preview ? (
+          // eslint-disable-next-line @next/next/no-img-element
+          <img src={preview} alt={`step ${idx + 1}`} className="w-full h-full object-cover" />
+        ) : (
+          <span className="font-sans text-[10px] text-muted-foreground text-center px-2">
+            no preview at this step (set Preview every = 1 for full coverage)
+          </span>
+        )}
+      </div>
+      <div className="min-w-0">
+        <div className="flex items-center justify-between mb-1">
+          <span className="font-sans text-caption uppercase tracking-wider text-muted-foreground">
+            Step <span className="text-foreground">{idx + 1}</span> of {total}
+          </span>
+          <div className="flex items-center gap-1.5 font-sans text-[10px]">
+            {stat?.timestep != null && <span className="text-muted-foreground">t <span className="text-foreground">{stat.timestep.toFixed(0)}</span></span>}
+            {stat?.sigma != null && <span className="text-muted-foreground">σ <span className="text-foreground">{stat.sigma.toFixed(2)}</span></span>}
+            {stat?.latentNorm != null && <span className="text-muted-foreground">‖z‖ <span className="text-foreground">{stat.latentNorm.toFixed(1)}</span></span>}
+            {stat?.latentMean != null && <span className="text-muted-foreground">μ <span className="text-foreground">{stat.latentMean.toFixed(2)}</span></span>}
+            {stat?.latentStd != null && <span className="text-muted-foreground">std <span className="text-foreground">{stat.latentStd.toFixed(2)}</span></span>}
+            <span className="text-muted-foreground">cfg <span className="text-foreground">{cfg}</span></span>
+          </div>
+        </div>
+        <input
+          type="range"
+          min={0}
+          max={Math.max(0, total - 1)}
+          value={idx}
+          onChange={(e) => onChange(parseInt(e.target.value, 10))}
+          className="w-full"
+          title={`Drag to scrub through ${total} captured steps. Step 1 is near pure noise; step ${total} is the final latent.`}
+        />
+        <div className="flex justify-between font-sans text-[9px] text-muted-foreground mt-0.5">
+          <span>step 1 · noise</span>
+          <span>step {total} · final</span>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+/**
  * 35mm-style film strip: every captured step in order, scrollable
  * horizontally, with per-step scalars under each frame. Sprockets and
  * background styled to evoke a contact sheet rather than a UI panel.
  */
+function buildFilmReelSvg(
+  previews: Array<string | null>,
+  latents: Float32Array[],
+  stepStats: Array<Omit<StepEvent, "event" | "shape" | "latentB64" | "previewDataUrl">>,
+  cfg: number,
+  prompt: string,
+  modelId: string,
+  seed: number,
+): string {
+  // Layout constants. Match the on-screen FilmStrip proportions but render
+  // at higher fidelity (each frame 220 px wide).
+  const FRAME_W = 220;
+  const FRAME_H = 220;
+  const CAPTION_H = 110;
+  const GAP = 12;
+  const PAD_X = 16;
+  const SPROCKET_H = 14;
+  const SPROCKET_W = 14;
+  const SPROCKET_GAP = 14;
+  const TITLE_H = 30;
+  const FOOTER_H = 22;
+
+  const innerH = SPROCKET_H + 8 + FRAME_H + 6 + CAPTION_H + 8 + SPROCKET_H;
+  const W = PAD_X * 2 + latents.length * (FRAME_W + GAP) - GAP;
+  const H = TITLE_H + innerH + FOOTER_H;
+
+  const frames = latents
+    .map((_, i) => {
+      const x = PAD_X + i * (FRAME_W + GAP);
+      const y = TITLE_H + SPROCKET_H + 8;
+      const preview = previews[i];
+      const stat = stepStats[i] ?? {};
+
+      // Frame image (or "no preview" placeholder).
+      const imageEl = preview
+        ? `<image href="${escXml(preview)}" x="${x}" y="${y}" width="${FRAME_W}" height="${FRAME_H}" preserveAspectRatio="xMidYMid slice" />`
+        : `<rect x="${x}" y="${y}" width="${FRAME_W}" height="${FRAME_H}" fill="#1a1a1a" />` +
+          `<text x="${x + FRAME_W / 2}" y="${y + FRAME_H / 2}" fill="#666" font-family="ui-monospace, monospace" font-size="10" text-anchor="middle" dominant-baseline="middle">no preview</text>`;
+      // Frame border (slight inset highlight).
+      const border = `<rect x="${x}" y="${y}" width="${FRAME_W}" height="${FRAME_H}" fill="none" stroke="#0a0a0a" stroke-width="2" />`;
+
+      // Caption box below the frame.
+      const cy = y + FRAME_H + 6;
+      const captionBg = `<rect x="${x}" y="${cy}" width="${FRAME_W}" height="${CAPTION_H}" fill="#0d0d0d" rx="2" />`;
+
+      // Caption rows.
+      const lines: Array<{ k: string; v: string }> = [
+        { k: "step", v: String(i + 1) },
+      ];
+      if (stat.timestep != null) lines.push({ k: "t", v: stat.timestep.toFixed(0) });
+      if (stat.sigma != null) lines.push({ k: "σ", v: stat.sigma.toFixed(2) });
+      if (stat.latentNorm != null) lines.push({ k: "‖z‖", v: stat.latentNorm.toFixed(2) });
+      if (stat.latentMean != null) lines.push({ k: "μ", v: stat.latentMean.toFixed(3) });
+      if (stat.latentStd != null) lines.push({ k: "std", v: stat.latentStd.toFixed(2) });
+      lines.push({ k: "cfg", v: String(cfg) });
+
+      const lineH = 14;
+      const captionEls = lines
+        .map((line, j) => {
+          const ly = cy + 14 + j * lineH;
+          return (
+            `<text x="${x + 10}" y="${ly}" fill="#888" font-family="ui-monospace, monospace" font-size="10">${escXml(line.k)}</text>` +
+            `<text x="${x + FRAME_W - 10}" y="${ly}" fill="#d4d4d4" font-family="ui-monospace, monospace" font-size="10" text-anchor="end">${escXml(line.v)}</text>`
+          );
+        })
+        .join("");
+
+      return imageEl + border + captionBg + captionEls;
+    })
+    .join("");
+
+  // Sprocket holes — top + bottom rows.
+  const sprocketCount = Math.max(latents.length * 2 + 4, 16);
+  const sprocketSpacing = (W - PAD_X * 2) / sprocketCount;
+  const sprocketsTop = Array.from({ length: sprocketCount })
+    .map((_, i) => {
+      const sx = PAD_X + i * sprocketSpacing;
+      const sy = TITLE_H + 0;
+      return `<rect x="${sx}" y="${sy}" width="${SPROCKET_W}" height="${SPROCKET_H * 0.7}" fill="#222" rx="1" />`;
+    })
+    .join("");
+  const sprocketsBot = Array.from({ length: sprocketCount })
+    .map((_, i) => {
+      const sx = PAD_X + i * sprocketSpacing;
+      const sy = TITLE_H + innerH - SPROCKET_H * 0.7;
+      return `<rect x="${sx}" y="${sy}" width="${SPROCKET_W}" height="${SPROCKET_H * 0.7}" fill="#222" rx="1" />`;
+    })
+    .join("");
+
+  const title =
+    `<text x="${PAD_X}" y="${TITLE_H - 10}" fill="#a36b3a" font-family="ui-monospace, monospace" font-size="11" letter-spacing="3">DIFFUSION ATLAS · CONTACT SHEET</text>` +
+    `<text x="${W - PAD_X}" y="${TITLE_H - 10}" fill="#888" font-family="ui-monospace, monospace" font-size="10" text-anchor="end">${escXml(modelId)} · seed ${escXml(seed)} · ${latents.length} frames</text>`;
+
+  const footer =
+    `<text x="${PAD_X}" y="${H - 6}" fill="#666" font-family="ui-monospace, monospace" font-size="9">${escXml(prompt)}</text>` +
+    `<text x="${W - PAD_X}" y="${H - 6}" fill="#666" font-family="ui-monospace, monospace" font-size="9" text-anchor="end">vector-lab-tools.github.io</text>`;
+
+  return `<?xml version="1.0" encoding="UTF-8"?>
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 ${W} ${H}" width="${W}" height="${H}" font-family="sans-serif">
+  <rect width="${W}" height="${H}" fill="#111" />
+  ${title}
+  ${sprocketsTop}
+  ${frames}
+  ${sprocketsBot}
+  ${footer}
+</svg>`;
+}
+
 function FilmStrip({
   previews,
   latents,
   stepStats,
   cfg,
+  prompt,
+  modelId,
+  seed,
 }: {
   previews: Array<string | null>;
   latents: Float32Array[];
   stepStats: Array<Omit<StepEvent, "event" | "shape" | "latentB64" | "previewDataUrl">>;
   cfg: number;
+  prompt: string;
+  modelId: string;
+  seed: number;
 }) {
+  const [openFrame, setOpenFrame] = useState<{ index: number; entry: CameraRollEntry } | null>(null);
+
+  function exportReel() {
+    const svg = buildFilmReelSvg(previews, latents, stepStats, cfg, prompt, modelId, seed);
+    const stamp = new Date().toISOString().replace(/[:.]/g, "-");
+    downloadSvg(`film-reel-seed${seed}-${stamp}.svg`, svg);
+  }
+  // Build CameraRollEntry for a frame, used when its metadata block is clicked.
+  function entryForFrame(i: number): CameraRollEntry | null {
+    const url = previews[i];
+    if (!url) return null;
+    const stat = stepStats[i] ?? {};
+    const details: Array<{ label: string; value: string | number }> = [
+      { label: "Step", value: i + 1 },
+      { label: "CFG", value: cfg },
+      { label: "Seed", value: seed },
+      { label: "Prompt", value: prompt },
+    ];
+    if (stat.timestep != null) details.push({ label: "Timestep", value: stat.timestep.toFixed(2) });
+    if (stat.sigma != null) details.push({ label: "Sigma", value: stat.sigma.toFixed(4) });
+    if (stat.latentNorm != null) details.push({ label: "‖z‖", value: stat.latentNorm.toFixed(4) });
+    if (stat.latentMean != null) details.push({ label: "Mean", value: stat.latentMean.toFixed(4) });
+    if (stat.latentStd != null) details.push({ label: "Std", value: stat.latentStd.toFixed(4) });
+    if (stat.latentMin != null) details.push({ label: "Min", value: stat.latentMin.toFixed(4) });
+    if (stat.latentMax != null) details.push({ label: "Max", value: stat.latentMax.toFixed(4) });
+    return { src: url, caption: `step ${i + 1}`, subcaption: "preview · click for stats", details };
+  }
+
+  const FRAME_PX = 150;
+  const COL_GAP_PX = 12;
+  // Joint width keeps the dark strip and white metadata strip aligned column-by-column.
+  const totalCols = latents.length;
+  const stripMinWidth = totalCols * FRAME_PX + (totalCols - 1) * COL_GAP_PX;
+
   return (
-    <div className="rounded-sm border border-parchment overflow-hidden bg-[#111] py-3">
-      {/* Top sprocket holes */}
-      <div className="flex gap-3 px-3 mb-2">
-        {Array.from({ length: Math.max(latents.length * 2, 12) }).map((_, i) => (
-          <span
-            key={`top-${i}`}
-            className="block w-3 h-2 bg-[#222] rounded-[1px] flex-shrink-0"
-          />
-        ))}
+    <div className="rounded-sm border border-parchment overflow-hidden">
+      {/* Export button — sits on the page surface, above the dark film strip. */}
+      <div className="bg-card px-3 py-1.5 flex items-center justify-between border-b border-parchment">
+        <span
+          className="font-mono text-[9px] uppercase tracking-[0.18em]"
+          style={{ color: "#a36b3a" }}
+        >
+          DIFFUSION ATLAS · CONTACT SHEET
+        </span>
+        <button
+          onClick={exportReel}
+          className="font-mono text-[10px] uppercase tracking-wider text-muted-foreground hover:text-foreground transition-colors flex items-center gap-1 border border-parchment-dark hover:border-burgundy rounded-sm px-2 py-0.5"
+          title="Download this film reel as a self-contained SVG. Embeds all preview thumbnails and per-step scalars."
+        >
+          <Download size={10} /> export reel · svg
+        </button>
       </div>
 
-      <div className="overflow-x-auto px-3">
-        <div className="flex gap-3 items-start">
-          {latents.map((_, i) => {
-            const preview = previews[i];
-            const stat = stepStats[i];
-            return (
-              <div
-                key={i}
-                className="flex-shrink-0 flex flex-col items-stretch"
-                style={{ width: "150px" }}
-              >
-                <div className="bg-black aspect-square border-2 border-[#0a0a0a] rounded-sm overflow-hidden flex items-center justify-center">
-                  {preview ? (
-                    // eslint-disable-next-line @next/next/no-img-element
-                    <img src={preview} alt={`step ${i + 1}`} className="w-full h-full object-cover" />
-                  ) : (
-                    <div className="text-[10px] text-[#666] font-mono uppercase tracking-wider">
-                      no preview
+      {/* Single horizontally-scrolling container so dark strip and white metadata
+          strip stay column-aligned while scrolling. */}
+      <div className="overflow-x-auto">
+        <div style={{ minWidth: `${stripMinWidth + 24}px` }}>
+          {/* Dark film strip: sprockets + frames + sprockets only. No numbers. */}
+          <div className="bg-[#111] py-2">
+            {/* Top sprocket row */}
+            <div className="flex gap-3 px-3 mb-2">
+              {Array.from({ length: Math.max(latents.length * 2, 12) }).map((_, i) => (
+                <span
+                  key={`top-${i}`}
+                  className="block w-3 h-2 bg-[#222] rounded-[1px] flex-shrink-0"
+                />
+              ))}
+            </div>
+
+            <div className="px-3">
+              <div className="flex items-start" style={{ gap: `${COL_GAP_PX}px` }}>
+                {latents.map((_, i) => {
+                  const preview = previews[i];
+                  return (
+                    <div
+                      key={i}
+                      className="flex-shrink-0 bg-black border-2 border-[#0a0a0a] rounded-sm overflow-hidden"
+                      style={{ width: `${FRAME_PX}px`, height: `${FRAME_PX}px` }}
+                    >
+                      {preview ? (
+                        // eslint-disable-next-line @next/next/no-img-element
+                        <img src={preview} alt={`step ${i + 1}`} className="w-full h-full object-cover" />
+                      ) : (
+                        <div className="w-full h-full flex items-center justify-center text-[10px] text-[#666] font-mono uppercase tracking-wider">
+                          no preview
+                        </div>
+                      )}
                     </div>
-                  )}
-                </div>
-                <div className="bg-[#0d0d0d] text-[#d4d4d4] font-mono text-[10px] leading-tight px-2 py-1.5 mt-1 rounded-sm">
-                  <div className="flex justify-between">
-                    <span className="text-[#888]">step</span>
-                    <span>{i + 1}</span>
-                  </div>
-                  {stat?.timestep != null && (
-                    <div className="flex justify-between">
-                      <span className="text-[#888]">t</span>
-                      <span>{stat.timestep.toFixed(0)}</span>
-                    </div>
-                  )}
-                  {stat?.sigma != null && (
-                    <div className="flex justify-between">
-                      <span className="text-[#888]">σ</span>
-                      <span>{stat.sigma.toFixed(2)}</span>
-                    </div>
-                  )}
-                  {stat?.latentNorm != null && (
-                    <div className="flex justify-between">
-                      <span className="text-[#888]">‖z‖</span>
-                      <span>{stat.latentNorm.toFixed(2)}</span>
-                    </div>
-                  )}
-                  {stat?.latentMean != null && (
-                    <div className="flex justify-between">
-                      <span className="text-[#888]">μ</span>
-                      <span>{stat.latentMean.toFixed(3)}</span>
-                    </div>
-                  )}
-                  {stat?.latentStd != null && (
-                    <div className="flex justify-between">
-                      <span className="text-[#888]">std</span>
-                      <span>{stat.latentStd.toFixed(2)}</span>
-                    </div>
-                  )}
-                  <div className="flex justify-between mt-0.5">
-                    <span className="text-[#666]">cfg</span>
-                    <span className="text-[#888]">{cfg}</span>
-                  </div>
-                </div>
+                  );
+                })}
               </div>
-            );
-          })}
+            </div>
+
+            {/* Bottom sprocket row */}
+            <div className="flex gap-3 px-3 mt-2">
+              {Array.from({ length: Math.max(latents.length * 2, 12) }).map((_, i) => (
+                <span
+                  key={`bot-${i}`}
+                  className="block w-3 h-2 bg-[#222] rounded-[1px] flex-shrink-0"
+                />
+              ))}
+            </div>
+          </div>
+
+          {/* White edge-print metadata strip — below the film, on the page. */}
+          <div className="bg-card px-3 py-2 border-t border-parchment">
+            <div className="flex items-start" style={{ gap: `${COL_GAP_PX}px` }}>
+              {latents.map((_, i) => (
+                <FilmFrameMetadata
+                  key={i}
+                  width={FRAME_PX}
+                  step={i + 1}
+                  stat={stepStats[i]}
+                  cfg={cfg}
+                  preview={previews[i] ?? null}
+                  onOpen={() => {
+                    const e = entryForFrame(i);
+                    if (e) setOpenFrame({ index: i, entry: e });
+                  }}
+                />
+              ))}
+            </div>
+          </div>
         </div>
       </div>
 
-      {/* Bottom sprocket holes */}
-      <div className="flex gap-3 px-3 mt-2">
-        {Array.from({ length: Math.max(latents.length * 2, 12) }).map((_, i) => (
-          <span
-            key={`bot-${i}`}
-            className="block w-3 h-2 bg-[#222] rounded-[1px] flex-shrink-0"
-          />
-        ))}
-      </div>
-
-      <div className="px-3 mt-2 font-mono text-[9px] text-[#555] uppercase tracking-wider flex items-center justify-between">
-        <span>diffusion-atlas · contact sheet</span>
-        <span>{latents.length} frames · scroll →</span>
-      </div>
+      {openFrame && (
+        <FilmFrameModal
+          openFrame={openFrame}
+          onClose={() => setOpenFrame(null)}
+          onPrev={() => {
+            for (let j = openFrame.index - 1; j >= 0; j--) {
+              const e = entryForFrame(j);
+              if (e) {
+                setOpenFrame({ index: j, entry: e });
+                return;
+              }
+            }
+          }}
+          onNext={() => {
+            for (let j = openFrame.index + 1; j < latents.length; j++) {
+              const e = entryForFrame(j);
+              if (e) {
+                setOpenFrame({ index: j, entry: e });
+                return;
+              }
+            }
+          }}
+          totalFrames={latents.length}
+          hasPrev={Array.from({ length: openFrame.index }).some((_, j) => previews[j])}
+          hasNext={previews.slice(openFrame.index + 1).some(Boolean)}
+        />
+      )}
     </div>
   );
 }
@@ -1089,5 +1634,153 @@ function StepInspector({
         })}
       </div>
     </div>
+  );
+}
+
+/**
+ * White edge-print metadata block sitting under each film frame. Black mono
+ * type on cream/white, like text printed under a contact sheet. Includes a
+ * tiny overlapping-channel RGB histogram (Photoshop-style) computed lazily
+ * from the preview thumbnail. Clicking opens the full frame modal — same
+ * larger view we use elsewhere in the app.
+ */
+function FilmFrameMetadata({
+  width,
+  step,
+  stat,
+  cfg,
+  preview,
+  onOpen,
+}: {
+  width: number;
+  step: number;
+  stat: Omit<StepEvent, "event" | "shape" | "latentB64" | "previewDataUrl"> | undefined;
+  cfg: number;
+  preview: string | null;
+  onOpen: () => void;
+}) {
+  const [hist, setHist] = useState<{ r: number[]; g: number[]; b: number[] } | null>(null);
+  useEffect(() => {
+    let cancelled = false;
+    if (!preview) return;
+    void computeImageStats(preview).then((s) => {
+      if (cancelled) return;
+      setHist({ r: s.histR, g: s.histG, b: s.histB });
+    }).catch(() => undefined);
+    return () => { cancelled = true; };
+  }, [preview]);
+
+  return (
+    <button
+      onClick={onOpen}
+      disabled={!preview}
+      className="flex-shrink-0 bg-white border border-parchment-dark rounded-sm hover:border-burgundy hover:shadow-editorial transition-all text-left disabled:opacity-60 disabled:cursor-default disabled:hover:border-parchment-dark disabled:hover:shadow-none"
+      style={{ width: `${width}px` }}
+      title={preview ? "Click for full preview + image stats" : "No preview captured at this step"}
+    >
+      <div className="px-1.5 py-1 font-mono text-[9px] text-black leading-tight">
+        <div className="flex items-baseline justify-between mb-0.5">
+          <span className="font-bold">#{step}</span>
+          <span className="text-[8px] text-neutral-500">cfg {cfg}</span>
+        </div>
+        <div className="grid grid-cols-2 gap-x-1 gap-y-[1px]">
+          {stat?.timestep != null && (<><span className="text-neutral-500">t</span><span className="text-right">{stat.timestep.toFixed(0)}</span></>)}
+          {stat?.sigma != null && (<><span className="text-neutral-500">σ</span><span className="text-right">{stat.sigma.toFixed(2)}</span></>)}
+          {stat?.latentNorm != null && (<><span className="text-neutral-500">‖z‖</span><span className="text-right">{stat.latentNorm.toFixed(1)}</span></>)}
+          {stat?.latentMean != null && (<><span className="text-neutral-500">μ</span><span className="text-right">{stat.latentMean.toFixed(2)}</span></>)}
+          {stat?.latentStd != null && (<><span className="text-neutral-500">std</span><span className="text-right">{stat.latentStd.toFixed(2)}</span></>)}
+        </div>
+        <div className="mt-1">
+          <RgbHistogramMini width={width - 12} height={28} hist={hist} />
+        </div>
+      </div>
+    </button>
+  );
+}
+
+/**
+ * Tiny overlapping-channel RGB histogram, drawn as three semi-transparent
+ * filled polylines on a near-white background. Mirrors the Photoshop /
+ * Lightroom style. Renders a placeholder rectangle until stats arrive.
+ */
+function RgbHistogramMini({
+  width,
+  height,
+  hist,
+}: {
+  width: number;
+  height: number;
+  hist: { r: number[]; g: number[]; b: number[] } | null;
+}) {
+  if (!hist) {
+    return (
+      <div
+        className="bg-neutral-100 border border-neutral-200 rounded-[2px]"
+        style={{ width, height }}
+      />
+    );
+  }
+  const bins = hist.r.length;
+  const max = Math.max(
+    ...hist.r, ...hist.g, ...hist.b,
+    1,
+  );
+  const stepX = width / bins;
+  const path = (channel: number[]) => {
+    const pts: string[] = [`0,${height}`];
+    for (let i = 0; i < bins; i++) {
+      const x = i * stepX;
+      const y = height - (channel[i] / max) * height;
+      pts.push(`${x.toFixed(2)},${y.toFixed(2)}`);
+    }
+    pts.push(`${width},${height}`);
+    return pts.join(" ");
+  };
+  return (
+    <svg
+      width={width}
+      height={height}
+      viewBox={`0 0 ${width} ${height}`}
+      className="block bg-neutral-50 border border-neutral-200 rounded-[2px]"
+      style={{ mixBlendMode: "multiply" }}
+    >
+      <polygon points={path(hist.r)} fill="rgba(220, 38, 38, 0.55)" stroke="rgba(180, 20, 20, 0.9)" strokeWidth="0.5" />
+      <polygon points={path(hist.g)} fill="rgba(34, 160, 80, 0.55)" stroke="rgba(20, 120, 60, 0.9)" strokeWidth="0.5" />
+      <polygon points={path(hist.b)} fill="rgba(37, 99, 235, 0.55)" stroke="rgba(20, 60, 180, 0.9)" strokeWidth="0.5" />
+    </svg>
+  );
+}
+
+/**
+ * Thin wrapper around the shared FrameModal — opens a big version of a
+ * film-strip frame with full stats + RGB histogram, with prev/next
+ * navigation between frames that have previews.
+ */
+function FilmFrameModal({
+  openFrame,
+  onClose,
+  onPrev,
+  onNext,
+  totalFrames,
+  hasPrev,
+  hasNext,
+}: {
+  openFrame: { index: number; entry: CameraRollEntry };
+  onClose: () => void;
+  onPrev: () => void;
+  onNext: () => void;
+  totalFrames: number;
+  hasPrev: boolean;
+  hasNext: boolean;
+}) {
+  return (
+    <FrameModal
+      entry={openFrame.entry}
+      onClose={onClose}
+      onPrev={hasPrev ? onPrev : undefined}
+      onNext={hasNext ? onNext : undefined}
+      index={openFrame.index}
+      total={totalFrames}
+    />
   );
 }

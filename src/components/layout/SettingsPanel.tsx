@@ -199,6 +199,38 @@ export function SettingsPanel() {
 
         <section className="mb-6">
           <h3 className="font-sans text-body-sm font-semibold mb-2 uppercase tracking-wider text-muted-foreground">
+            Fast mode
+          </h3>
+          <label className="flex items-start gap-2 font-sans text-body-sm mb-2">
+            <input
+              type="checkbox"
+              checked={settings.fastMode}
+              onChange={(e) => setSettings({ ...settings, fastMode: e.target.checked })}
+              className="mt-1"
+            />
+            <span>
+              Cap denoising steps globally
+              <span className="block font-sans text-caption text-muted-foreground italic">
+                When on, every operation clamps its <code>Steps</code> to the cap below regardless of the form value. Useful for fast iteration on prompts and UX before committing to a quality run.
+              </span>
+            </span>
+          </label>
+          <label className="flex items-center gap-2 font-sans text-caption">
+            <span className="text-muted-foreground">Max steps</span>
+            <input
+              type="number"
+              min={1}
+              max={100}
+              value={settings.fastModeMaxSteps}
+              onChange={(e) => setSettings({ ...settings, fastModeMaxSteps: parseInt(e.target.value, 10) || 8 })}
+              className="input-editorial w-24 py-1"
+              disabled={!settings.fastMode}
+            />
+          </label>
+        </section>
+
+        <section className="mb-6">
+          <h3 className="font-sans text-body-sm font-semibold mb-2 uppercase tracking-wider text-muted-foreground">
             Cache
           </h3>
           <div className="flex items-center gap-3 mb-2 font-sans text-body-sm">
