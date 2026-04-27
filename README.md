@@ -11,7 +11,7 @@
 
 **Author:** David M. Berry
 **Institution:** University of Sussex
-**Version:** 0.2.4
+**Version:** 0.3.0
 **Date:** 28 April 2026
 **Licence:** MIT
 
@@ -55,7 +55,9 @@ The two views run on the same generated images. A finding in Bench (the model fa
 Trace the iterative denoising path through latent space. The local backend streams per-step latents over NDJSON, with a thumbnail decoded through the VAE every Nth step (configurable via the **Preview every** field). The client projects the latents to 3D via PCA and renders the path in Three.js with start (gold) and end (burgundy) markers; thumbnails appear as billboard sprites above their corresponding step markers, so you can see the image taking shape along the curve. Local backend required: hosted providers do not expose intermediate latents.
 
 ### Guidance Sweep
-Generate the same prompt and seed across a list of CFG values (default `1, 2.5, 4, 7.5, 12`). The image grid is keyed by CFG with per-cell status while the run is in flight. The sweep is sequential rather than `Promise.all` parallel so a single failure doesn't tank the run, and rate-limited responses (Replicate's free tier triggers them quickly) are honoured: each cell shows a live `Retrying in Ns` countdown then resumes. A drift curve above the grid plots normalised perceptual-hash distance from the baseline (CFG nearest 7.5), so the controllability surface — and where mode collapse begins — is visible at a glance. Hashing runs entirely in the browser via Canvas; no extra dependencies.
+Generate the same prompt and seed across a list of CFG values (default `1, 2.5, 4, 7.5, 12`). The image grid is keyed by CFG with per-cell status while the run is in flight. The sweep is sequential per lane rather than `Promise.all` so a single failure doesn't tank the run, and rate-limited responses (Replicate's free tier triggers them quickly) are honoured: each cell shows a live `Retrying in Ns` countdown then resumes. A drift curve above each grid plots normalised perceptual-hash distance from the baseline (CFG nearest 7.5), so the controllability surface — and where mode collapse begins — is visible at a glance.
+
+**Cross-backend comparison** (v0.3.0): tick *Compare with a second provider* to run a parallel sweep against any other configured provider (Replicate ↔ Fal, hosted ↔ Local, etc.). Both lanes share the same prompt, seed, steps, and CFG list and run in parallel — independent rate limits, independent retry loops. Side-by-side grids and drift curves make geometry that is structural (consistent across backends) distinguishable from geometry that is contingent (specific to one provider's training).
 
 ### Latent Neighbourhood
 Sample k images around an anchor seed at a configurable radius. Deterministic seed offsets so the run is reproducible. Hosted mode samples by varying the seed (each seed maps to a different starting latent); true Gaussian perturbation of the initial latent at a chosen sigma is queued for the local backend.
@@ -226,7 +228,9 @@ The Atlas operations test specific claims of the framework. Denoise Trajectory m
 - [x] Per-step preview thumbnails along the trajectory + drift curve in Guidance Sweep (v0.2.2)
 - [x] CLIP-based auto-scoring for Compositional Bench (v0.2.3)
 - [x] Fal.ai hosted provider + UMAP toggle on the trajectory projection (v0.2.4)
-- [ ] Cross-backend agreement view (same operation, hosted vs local, side by side)
+- [x] Cross-backend agreement view in Guidance Sweep (v0.3.0) — same prompt + seed, two providers in parallel, side-by-side grids and drift curves
+- [ ] Cross-backend comparison extended to Latent Neighbourhood and Compositional Bench
+- [ ] Object-detection-based bench scoring (proper GenEval rather than CLIP cosine)
 - [ ] UMAP option for trajectory and neighbourhood
 - [ ] PDF export across operations
 - [ ] Fal.ai / Together / Stability hosted providers

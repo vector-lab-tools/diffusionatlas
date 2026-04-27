@@ -3,10 +3,11 @@
 import { useEffect, useMemo, useState } from "react";
 import { useSettings } from "@/context/DiffusionSettingsContext";
 import { useImageBlobCache } from "@/context/ImageBlobCacheContext";
-import type { DiffusionRequest, DiffusionResultMeta } from "@/lib/providers/types";
+import type { DiffusionRequest, DiffusionResultMeta, ProviderId } from "@/lib/providers/types";
 import { saveRun } from "@/lib/cache/runs";
 import type { Run, RunSampleRef } from "@/types/run";
 import { ahash, normalisedDrift, type Hash } from "@/lib/geometry/perceptual_hash";
+import { ALL_PROVIDERS, PROVIDER_DEFAULT_MODEL, providerLabel } from "@/lib/providers/defaults";
 
 interface DiffuseResponse {
   images: string[];
@@ -102,6 +103,13 @@ function DriftCurve({ cfgs, drift }: { cfgs: number[]; drift: Array<number | nul
   );
 }
 
+interface ProviderConfig {
+  providerId: ProviderId;
+  modelId: string;
+  apiKey?: string;
+  localBaseUrl?: string;
+}
+
 export function GuidanceSweep() {
   const { settings } = useSettings();
   const { set: cacheImage } = useImageBlobCache();
@@ -111,46 +119,73 @@ export function GuidanceSweep() {
   const [steps, setSteps] = useState(settings.defaults.steps);
   const [cfgList, setCfgList] = useState(DEFAULT_CFG_SET);
   const [rows, setRows] = useState<SweepRow[]>([]);
+  const [rowsB, setRowsB] = useState<SweepRow[]>([]);
   const [running, setRunning] = useState(false);
   const [topError, setTopError] = useState<string | null>(null);
   const [errorLink, setErrorLink] = useState<{ href: string; label: string } | null>(null);
 
+  // Cross-backend agreement: optionally run a second sweep against a different
+  // provider in parallel and show the two grids side by side.
+  const [compareEnabled, setCompareEnabled] = useState(false);
+  const [compareProviderId, setCompareProviderId] = useState<ProviderId>("local");
+  const [compareModelId, setCompareModelId] = useState<string>(PROVIDER_DEFAULT_MODEL.local);
+
   const cfgs = parseCfgList(cfgList);
   const cfgWarning = modelIgnoresCfg(settings.modelId);
 
-  // Hash any new ok rows so drift can be plotted. Runs once per row arrival.
+  const primaryConfig: ProviderConfig = {
+    providerId: settings.providerId,
+    modelId: settings.modelId,
+    apiKey: settings.apiKeys[settings.providerId],
+    localBaseUrl: settings.backend === "local" ? settings.localBaseUrl : undefined,
+  };
+
+  const compareConfig: ProviderConfig = {
+    providerId: compareProviderId,
+    modelId: compareModelId,
+    apiKey: settings.apiKeys[compareProviderId],
+    localBaseUrl: compareProviderId === "local" ? settings.localBaseUrl : undefined,
+  };
+
+  // Hash any new ok rows in either lane so drift can be plotted.
   useEffect(() => {
     let cancelled = false;
-    void (async () => {
-      for (let i = 0; i < rows.length; i++) {
-        const row = rows[i];
-        if (row.status === "ok" && row.imageDataUrl && !row.hash) {
-          try {
-            const h = await ahash(row.imageDataUrl);
-            if (cancelled) return;
-            setRows((prev) => prev.map((r, j) => (j === i ? { ...r, hash: h } : r)));
-          } catch {
-            /* ignore — drift won't show for this row */
+    function hashLane(lane: SweepRow[], setter: React.Dispatch<React.SetStateAction<SweepRow[]>>) {
+      void (async () => {
+        for (let i = 0; i < lane.length; i++) {
+          const row = lane[i];
+          if (row.status === "ok" && row.imageDataUrl && !row.hash) {
+            try {
+              const h = await ahash(row.imageDataUrl);
+              if (cancelled) return;
+              setter((prev) => prev.map((r, j) => (j === i ? { ...r, hash: h } : r)));
+            } catch {
+              /* ignore */
+            }
           }
         }
-      }
-    })();
+      })();
+    }
+    hashLane(rows, setRows);
+    hashLane(rowsB, setRowsB);
     return () => {
       cancelled = true;
     };
-  }, [rows]);
+  }, [rows, rowsB]);
 
-  // Pick a baseline: CFG nearest to 7.5. Drift from baseline for each row.
-  const drift = useMemo(() => {
-    const ok = rows.filter((r) => r.status === "ok" && r.hash);
+  function laneDrift(lane: SweepRow[]): Array<number | null> | null {
+    const ok = lane.filter((r) => r.status === "ok" && r.hash);
     if (ok.length < 2) return null;
     const baseline = ok.reduce((best, r) => (Math.abs(r.cfg - 7.5) < Math.abs(best.cfg - 7.5) ? r : best));
-    return rows.map((r) => (r.status === "ok" && r.hash ? normalisedDrift(baseline.hash!, r.hash) : null));
-  }, [rows]);
+    return lane.map((r) => (r.status === "ok" && r.hash ? normalisedDrift(baseline.hash!, r.hash) : null));
+  }
 
-  async function callOnce(cfg: number): Promise<{ ok: boolean; data?: DiffuseResponse; err?: GenError; status?: number }> {
+  const drift = useMemo(() => laneDrift(rows), [rows]);
+  const driftB = useMemo(() => (compareEnabled ? laneDrift(rowsB) : null), [rowsB, compareEnabled]);
+
+  async function callOnce(cfg: number, cfg_: ProviderConfig): Promise<{ ok: boolean; data?: DiffuseResponse; err?: GenError; status?: number }> {
     const request: DiffusionRequest = {
-      modelId: settings.modelId,
+      modelId: cfg_.modelId,
       prompt,
       seed,
       steps,
@@ -159,20 +194,14 @@ export function GuidanceSweep() {
       height: settings.defaults.height,
       scheduler: settings.defaults.scheduler,
     };
-    const apiKey = settings.apiKeys[settings.providerId];
-
     try {
       const res = await fetch("/api/diffuse", {
         method: "POST",
         headers: {
           "Content-Type": "application/json",
-          ...(apiKey ? { "X-Diffusion-API-Key": apiKey } : {}),
+          ...(cfg_.apiKey ? { "X-Diffusion-API-Key": cfg_.apiKey } : {}),
         },
-        body: JSON.stringify({
-          providerId: settings.providerId,
-          request,
-          localBaseUrl: settings.backend === "local" ? settings.localBaseUrl : undefined,
-        }),
+        body: JSON.stringify({ providerId: cfg_.providerId, request, localBaseUrl: cfg_.localBaseUrl }),
       });
       if (!res.ok) {
         const err: GenError = await res.json().catch(() => ({ error: "unknown" }));
@@ -185,24 +214,31 @@ export function GuidanceSweep() {
     }
   }
 
-  function setRowAt(idx: number, patch: Partial<SweepRow>) {
-    setRows((prev) => prev.map((r, j) => (j === idx ? { ...r, ...patch } : r)));
+  function makeSetRowAt(setter: React.Dispatch<React.SetStateAction<SweepRow[]>>) {
+    return (idx: number, patch: Partial<SweepRow>) =>
+      setter((prev) => prev.map((r, j) => (j === idx ? { ...r, ...patch } : r)));
   }
 
-  async function runOne(cfg: number, idx: number, imageKeyRef: { key?: string; meta?: DiffusionResultMeta }): Promise<{ abortAll?: boolean }> {
+  async function runOne(
+    cfg: number,
+    idx: number,
+    cfg_: ProviderConfig,
+    setRowAt: (idx: number, patch: Partial<SweepRow>) => void,
+    keyPrefix: string,
+    imageKeyRef: { key?: string; meta?: DiffusionResultMeta },
+  ): Promise<{ abortAll?: boolean }> {
     const MAX_ATTEMPTS = 4;
     for (let attempt = 1; attempt <= MAX_ATTEMPTS; attempt++) {
-      const r = await callOnce(cfg);
+      const r = await callOnce(cfg, cfg_);
       if (r.ok && r.data) {
         const dataUrl = r.data.images[0];
-        const imageKey = `sweep::${r.data.meta.providerId}::${r.data.meta.modelId}::${seed}::${steps}::${cfg}::${Date.now()}`;
+        const imageKey = `${keyPrefix}::${r.data.meta.providerId}::${r.data.meta.modelId}::${seed}::${steps}::${cfg}::${Date.now()}`;
         await cacheImage(imageKey, dataUrlToBlob(dataUrl));
         imageKeyRef.key = imageKey;
         imageKeyRef.meta = r.data.meta;
         setRowAt(idx, { status: "ok", imageDataUrl: dataUrl, meta: r.data.meta });
         return {};
       }
-
       const err = r.err ?? { error: "unknown" };
       if (err.error === "rate_limit" && attempt < MAX_ATTEMPTS) {
         const wait = (err.retryAfterSeconds ?? 5) + 1;
@@ -213,23 +249,77 @@ export function GuidanceSweep() {
         setRowAt(idx, { status: "running", errorMessage: undefined });
         continue;
       }
-
       if (err.error === "auth" || err.error === "payment_required") {
         if (err.error === "auth") {
-          setTopError("Missing or invalid API key. Open Settings and paste a token.");
+          setTopError(`Missing or invalid API key for ${cfg_.providerId}. Open Settings.`);
         } else {
-          setTopError(err.message ?? "Insufficient credit on the provider account.");
-          if (err.billingUrl) setErrorLink({ href: err.billingUrl, label: "Add credit on Replicate" });
+          setTopError(`${providerLabel(cfg_.providerId)}: ${err.message ?? "insufficient credit"}`);
+          if (err.billingUrl) setErrorLink({ href: err.billingUrl, label: `Top up ${providerLabel(cfg_.providerId)}` });
         }
         setRowAt(idx, { status: "error", errorMessage: err.message ?? "Aborted" });
         return { abortAll: true };
       }
-
       setRowAt(idx, { status: "error", errorMessage: err.message ?? `Failed (${r.status ?? "?"})` });
       return {};
     }
     setRowAt(idx, { status: "error", errorMessage: "Rate limited; gave up after retries" });
     return {};
+  }
+
+  async function runLane(
+    cfg_: ProviderConfig,
+    keyPrefix: string,
+    setter: React.Dispatch<React.SetStateAction<SweepRow[]>>,
+  ): Promise<{ samples: RunSampleRef[]; providerIdSeen?: string; modelIdSeen?: string }> {
+    const initial: SweepRow[] = cfgs.map((cfg) => ({ cfg, status: "pending" }));
+    setter(initial);
+    const setRowAt = makeSetRowAt(setter);
+    const samples: RunSampleRef[] = [];
+    let providerIdSeen: string | undefined;
+    let modelIdSeen: string | undefined;
+    let aborted = false;
+    for (let i = 0; i < cfgs.length; i++) {
+      if (aborted) {
+        setter((prev) => prev.map((r, j) => (j >= i ? { ...r, status: "error", errorMessage: "Skipped" } : r)));
+        break;
+      }
+      setRowAt(i, { status: "running" });
+      const ref: { key?: string; meta?: DiffusionResultMeta } = {};
+      const { abortAll } = await runOne(cfgs[i], i, cfg_, setRowAt, keyPrefix, ref);
+      if (ref.key && ref.meta) {
+        samples.push({ imageKey: ref.key, variable: cfgs[i], responseTimeMs: ref.meta.responseTimeMs });
+        providerIdSeen = ref.meta.providerId;
+        modelIdSeen = ref.meta.modelId;
+      }
+      if (abortAll) aborted = true;
+      if (i < cfgs.length - 1) await new Promise((res) => setTimeout(res, 1500));
+    }
+    return { samples, providerIdSeen, modelIdSeen };
+  }
+
+  async function persistRun(
+    samples: RunSampleRef[],
+    providerIdSeen: string | undefined,
+    modelIdSeen: string | undefined,
+    extra: Record<string, unknown>,
+  ) {
+    if (samples.length === 0 || !providerIdSeen || !modelIdSeen) return;
+    const run: Run = {
+      id: `sweep::${providerIdSeen}::${Date.now()}`,
+      kind: "sweep",
+      createdAt: new Date().toISOString(),
+      providerId: providerIdSeen,
+      modelId: modelIdSeen,
+      prompt,
+      seed,
+      steps,
+      cfg: cfgs[0],
+      width: settings.defaults.width,
+      height: settings.defaults.height,
+      samples,
+      extra,
+    };
+    await saveRun(run);
   }
 
   async function runSweep() {
@@ -240,47 +330,19 @@ export function GuidanceSweep() {
     setRunning(true);
     setTopError(null);
     setErrorLink(null);
-    const initial: SweepRow[] = cfgs.map((cfg) => ({ cfg, status: "pending" }));
-    setRows(initial);
+    if (!compareEnabled) setRowsB([]);
 
-    let aborted = false;
-    const samples: RunSampleRef[] = [];
-    let providerIdSeen: string | undefined;
-    let modelIdSeen: string | undefined;
-    for (let i = 0; i < cfgs.length; i++) {
-      if (aborted) {
-        setRows((prev) => prev.map((r, j) => (j >= i ? { ...r, status: "error", errorMessage: "Skipped" } : r)));
-        break;
-      }
-      setRowAt(i, { status: "running" });
-      const ref: { key?: string; meta?: DiffusionResultMeta } = {};
-      const { abortAll } = await runOne(cfgs[i], i, ref);
-      if (ref.key && ref.meta) {
-        samples.push({ imageKey: ref.key, variable: cfgs[i], responseTimeMs: ref.meta.responseTimeMs });
-        providerIdSeen = ref.meta.providerId;
-        modelIdSeen = ref.meta.modelId;
-      }
-      if (abortAll) aborted = true;
-      if (i < cfgs.length - 1) await new Promise((res) => setTimeout(res, 1500));
-    }
-
-    if (samples.length > 0 && providerIdSeen && modelIdSeen) {
-      const run: Run = {
-        id: `sweep::${Date.now()}`,
-        kind: "sweep",
-        createdAt: new Date().toISOString(),
-        providerId: providerIdSeen,
-        modelId: modelIdSeen,
-        prompt,
-        seed,
-        steps,
-        cfg: cfgs[0],
-        width: settings.defaults.width,
-        height: settings.defaults.height,
-        samples,
-        extra: { cfgList: cfgs },
-      };
-      await saveRun(run);
+    if (compareEnabled) {
+      // Run both lanes in parallel — independent providers, independent rate limits.
+      const [a, b] = await Promise.all([
+        runLane(primaryConfig, "sweep", setRows),
+        runLane(compareConfig, "sweep-cmp", setRowsB),
+      ]);
+      await persistRun(a.samples, a.providerIdSeen, a.modelIdSeen, { cfgList: cfgs, lane: "primary" });
+      await persistRun(b.samples, b.providerIdSeen, b.modelIdSeen, { cfgList: cfgs, lane: "compare" });
+    } else {
+      const a = await runLane(primaryConfig, "sweep", setRows);
+      await persistRun(a.samples, a.providerIdSeen, a.modelIdSeen, { cfgList: cfgs });
     }
 
     setRunning(false);
@@ -342,16 +404,62 @@ export function GuidanceSweep() {
         </div>
       </div>
 
-      <div className="flex items-center gap-3 mb-4">
+      {/* Compare-with: cross-backend agreement */}
+      <div className="border border-parchment rounded-sm p-3 mb-4 bg-cream/20">
+        <label className="flex items-center gap-2 font-sans text-body-sm">
+          <input
+            type="checkbox"
+            checked={compareEnabled}
+            onChange={(e) => setCompareEnabled(e.target.checked)}
+          />
+          <span>Compare with a second provider (run two sweeps in parallel)</span>
+        </label>
+        {compareEnabled && (
+          <div className="grid grid-cols-2 gap-3 mt-3">
+            <label className="block">
+              <span className="font-sans text-caption uppercase tracking-wider text-muted-foreground">Compare provider</span>
+              <select
+                value={compareProviderId}
+                onChange={(e) => {
+                  const p = e.target.value as ProviderId;
+                  setCompareProviderId(p);
+                  setCompareModelId(PROVIDER_DEFAULT_MODEL[p]);
+                }}
+                className="input-editorial mt-1"
+              >
+                {ALL_PROVIDERS.filter((p) => p !== settings.providerId).map((p) => (
+                  <option key={p} value={p}>{providerLabel(p)}</option>
+                ))}
+              </select>
+            </label>
+            <label className="block">
+              <span className="font-sans text-caption uppercase tracking-wider text-muted-foreground">Compare model</span>
+              <input
+                type="text"
+                value={compareModelId}
+                onChange={(e) => setCompareModelId(e.target.value)}
+                className="input-editorial mt-1"
+              />
+            </label>
+          </div>
+        )}
+      </div>
+
+      <div className="flex items-center gap-3 mb-4 flex-wrap">
         <button
           onClick={() => void runSweep()}
           disabled={running}
           className={running ? "btn-editorial-secondary opacity-50" : "btn-editorial-primary"}
         >
-          {running ? "Running sweep…" : `Run sweep (${cfgs.length} ${cfgs.length === 1 ? "image" : "images"})`}
+          {running
+            ? "Running sweep…"
+            : compareEnabled
+              ? `Run sweep × 2 (${cfgs.length * 2} images)`
+              : `Run sweep (${cfgs.length} ${cfgs.length === 1 ? "image" : "images"})`}
         </button>
         <span className="font-sans text-caption text-muted-foreground">
-          {settings.backend === "local" ? "Local" : "Hosted"} · {settings.providerId} · {settings.modelId}
+          {providerLabel(settings.providerId)} · {settings.modelId}
+          {compareEnabled && <> ↔ {providerLabel(compareProviderId)} · {compareModelId}</>}
         </span>
       </div>
 
@@ -374,46 +482,74 @@ export function GuidanceSweep() {
         </div>
       )}
 
-      {rows.length > 0 && drift && drift.some((d) => d !== null) && (
-        <div className="border-t border-parchment pt-4 mb-3">
-          <h3 className="font-sans text-caption uppercase tracking-wider text-muted-foreground mb-2">
+      {/* Lanes: primary, plus optional comparison */}
+      {rows.length > 0 && (
+        <SweepLane
+          label={`${providerLabel(settings.providerId)} · ${settings.modelId}`}
+          rows={rows}
+          drift={drift}
+        />
+      )}
+      {compareEnabled && rowsB.length > 0 && (
+        <SweepLane
+          label={`${providerLabel(compareProviderId)} · ${compareModelId}`}
+          rows={rowsB}
+          drift={driftB}
+        />
+      )}
+    </div>
+  );
+}
+
+interface SweepLaneProps {
+  label: string;
+  rows: SweepRow[];
+  drift: Array<number | null> | null;
+}
+
+function SweepLane({ label, rows, drift }: SweepLaneProps) {
+  return (
+    <div className="border-t border-parchment pt-4 mt-4">
+      <h3 className="font-sans text-caption uppercase tracking-wider text-muted-foreground mb-2">
+        {label}
+      </h3>
+      {drift && drift.some((d) => d !== null) && (
+        <div className="mb-3">
+          <p className="font-sans text-caption text-muted-foreground mb-1">
             Drift from CFG ≈ 7.5 baseline (perceptual hash distance)
-          </h3>
+          </p>
           <DriftCurve cfgs={rows.map((r) => r.cfg)} drift={drift} />
         </div>
       )}
-
-      {rows.length > 0 && (
-        <div className="border-t border-parchment pt-4">
-          <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-5 gap-3">
-            {rows.map((row, i) => (
-              <div key={i} className="flex flex-col">
-                <div className="aspect-square bg-cream/50 border border-parchment rounded-sm overflow-hidden flex items-center justify-center">
-                  {row.status === "ok" && row.imageDataUrl && (
-                    // eslint-disable-next-line @next/next/no-img-element
-                    <img src={row.imageDataUrl} alt={`CFG ${row.cfg}`} className="w-full h-full object-cover" />
-                  )}
-                  {row.status === "running" && (
-                    <span className="font-sans text-caption text-muted-foreground">Generating…</span>
-                  )}
-                  {row.status === "pending" && (
-                    <span className="font-sans text-caption text-muted-foreground">Queued</span>
-                  )}
-                  {row.status === "error" && (
-                    <span className="font-sans text-caption text-burgundy text-center px-2">
-                      {row.errorMessage ?? "Failed"}
-                    </span>
-                  )}
-                </div>
-                <div className="mt-1 font-sans text-caption text-muted-foreground text-center">
-                  CFG <span className="text-foreground font-medium">{row.cfg}</span>
-                  {row.meta && <> · {(row.meta.responseTimeMs / 1000).toFixed(1)}s</>}
-                </div>
-              </div>
-            ))}
+      <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-5 gap-3">
+        {rows.map((row, i) => (
+          <div key={i} className="flex flex-col">
+            <div className="aspect-square bg-cream/50 border border-parchment rounded-sm overflow-hidden flex items-center justify-center">
+              {row.status === "ok" && row.imageDataUrl && (
+                // eslint-disable-next-line @next/next/no-img-element
+                <img src={row.imageDataUrl} alt={`CFG ${row.cfg}`} className="w-full h-full object-cover" />
+              )}
+              {row.status === "running" && (
+                <span className="font-sans text-caption text-muted-foreground text-center px-2">
+                  {row.errorMessage ?? "Generating…"}
+                </span>
+              )}
+              {row.status === "pending" && (
+                <span className="font-sans text-caption text-muted-foreground">Queued</span>
+              )}
+              {row.status === "error" && (
+                <span className="font-sans text-caption text-burgundy text-center px-2">
+                  {row.errorMessage ?? "Failed"}
+                </span>
+              )}
+            </div>
+            <div className="mt-1 font-sans text-caption text-muted-foreground text-center">
+              CFG <span className="text-foreground font-medium">{row.cfg}</span>
+              {row.meta && <> · {(row.meta.responseTimeMs / 1000).toFixed(1)}s</>}
+            </div>
           </div>
-        </div>
-      )}
+        ))}
+      </div>
     </div>
   );
 }

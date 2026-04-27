@@ -5,17 +5,7 @@ import { X, Eye, EyeOff } from "lucide-react";
 import { useSettings, type Backend, type ProviderId } from "@/context/DiffusionSettingsContext";
 import { useLatentCache } from "@/context/LatentCacheContext";
 import { useImageBlobCache } from "@/context/ImageBlobCacheContext";
-
-const HOSTED_PROVIDERS: ProviderId[] = ["replicate", "fal", "together", "stability"];
-
-/** Sensible starting-point model id per provider — different naming conventions. */
-const PROVIDER_DEFAULT_MODEL: Record<ProviderId, string> = {
-  replicate: "black-forest-labs/flux-schnell",
-  fal: "fal-ai/flux/schnell",
-  together: "black-forest-labs/FLUX.1-schnell-Free",
-  stability: "stable-diffusion-xl-1024-v1-0",
-  local: "runwayml/stable-diffusion-v1-5",
-};
+import { HOSTED_PROVIDERS, PROVIDER_DEFAULT_MODEL } from "@/lib/providers/defaults";
 
 export function SettingsPanel() {
   const { settings, setSettings, settingsOpen, setSettingsOpen } = useSettings();
