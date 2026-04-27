@@ -6,10 +6,20 @@ import { OrbitControls, Line, Html } from "@react-three/drei";
 import * as THREE from "three";
 import type { Point3 } from "@/lib/geometry/pca";
 
-interface TrajectoryThreeProps {
+export interface TrajectoryLayerInput {
+  id: string;
+  label: string;
+  colour: string;
   points: Point3[];
-  /** Optional preview thumbnails per step (data URLs); same length as points. */
   previews?: Array<string | null>;
+}
+
+interface TrajectoryThreeProps {
+  /** Single-layer compatibility: existing call sites pass these directly. */
+  points?: Point3[];
+  previews?: Array<string | null>;
+  /** Multi-layer mode: pass an array of named/coloured layers to overlay. */
+  layers?: TrajectoryLayerInput[];
   height?: number;
 }
 
@@ -72,13 +82,13 @@ function normalise(points: Point3[]): NormaliseResult {
   };
 }
 
-function Path({ points }: { points: Point3[] }) {
+function Path({ points, color = "#7c2d36" }: { points: Point3[]; color?: string }) {
   const positions = useMemo<[number, number, number][]>(() => points.map((p) => [p[0], p[1], p[2]]), [points]);
   if (positions.length < 2) return null;
   return (
     <Line
       points={positions}
-      color="#7c2d36"
+      color={color}
       lineWidth={2}
       transparent
       opacity={0.85}
@@ -86,21 +96,15 @@ function Path({ points }: { points: Point3[] }) {
   );
 }
 
-function StepMarkers({ points }: { points: Point3[] }) {
-  const last = points.length - 1;
+function StepMarkers({ points, color = "#666" }: { points: Point3[]; color?: string }) {
   return (
     <>
-      {points.map((p, i) => {
-        const isFirst = i === 0;
-        const isLast = i === last;
-        const colour = isFirst ? "#c9a227" : isLast ? "#7c2d36" : "#666";
-        return (
-          <mesh key={i} position={p}>
-            <sphereGeometry args={[0.025, 16, 16]} />
-            <meshStandardMaterial color={colour} />
-          </mesh>
-        );
-      })}
+      {points.map((p, i) => (
+        <mesh key={i} position={p}>
+          <sphereGeometry args={[0.022, 12, 12]} />
+          <meshStandardMaterial color={color} />
+        </mesh>
+      ))}
     </>
   );
 }
@@ -113,8 +117,32 @@ function AutoRotate() {
   return null;
 }
 
-export function TrajectoryThree({ points, previews, height = 480 }: TrajectoryThreeProps) {
-  const { points: norm, span } = useMemo(() => normalise(points), [points]);
+export function TrajectoryThree({ points, previews, layers, height = 480 }: TrajectoryThreeProps) {
+  // Build a unified list of layers. Legacy single-layer callers still work.
+  const renderLayers = useMemo<TrajectoryLayerInput[]>(() => {
+    if (layers && layers.length > 0) return layers;
+    if (points && points.length > 0) {
+      return [{ id: "default", label: "trajectory", colour: "#7c2d36", points, previews }];
+    }
+    return [];
+  }, [layers, points, previews]);
+
+  // Normalise across ALL layers' points jointly so they share a frame.
+  const allPoints = useMemo(
+    () => renderLayers.flatMap((l) => l.points),
+    [renderLayers],
+  );
+  const { points: normAll } = useMemo(() => normalise(allPoints), [allPoints]);
+
+  // Slice the normalised points back into per-layer segments.
+  const normalisedLayers = useMemo(() => {
+    let cursor = 0;
+    return renderLayers.map((l) => {
+      const slice = normAll.slice(cursor, cursor + l.points.length);
+      cursor += l.points.length;
+      return { ...l, points: slice };
+    });
+  }, [renderLayers, normAll]);
 
   return (
     <div style={{ height }} className="rounded-sm border border-parchment bg-cream/30 overflow-hidden">
@@ -123,33 +151,27 @@ export function TrajectoryThree({ points, previews, height = 480 }: TrajectoryTh
         <directionalLight position={[5, 5, 5]} intensity={0.6} />
         <directionalLight position={[-5, -3, -5]} intensity={0.3} />
         <gridHelper args={[4, 8, "#d6d6d6", "#ececec"]} position={[0, -1.2, 0]} />
-        <Path points={norm} />
-        <StepMarkers points={norm} />
-        {previews?.map((url, i) =>
-          url && i < norm.length ? (
-            <PreviewBillboard key={i} position={norm[i]} dataUrl={url} />
-          ) : null,
-        )}
-        {norm.length > 0 && (
-          <Html position={norm[0]} center>
-            <div
-              className="font-sans whitespace-nowrap pointer-events-none select-none"
-              style={{ color: "#c9a227", fontSize: "9px", letterSpacing: "0.08em", transform: "translate(0, -10px)", opacity: 0.7 }}
-            >
-              start
-            </div>
-          </Html>
-        )}
-        {norm.length > 1 && (
-          <Html position={norm[norm.length - 1]} center>
-            <div
-              className="font-sans whitespace-nowrap pointer-events-none select-none"
-              style={{ color: "#7c2d36", fontSize: "9px", letterSpacing: "0.08em", transform: "translate(0, 10px)", opacity: 0.7 }}
-            >
-              end
-            </div>
-          </Html>
-        )}
+        {normalisedLayers.map((layer) => (
+          <group key={layer.id}>
+            <Path points={layer.points} color={layer.colour} />
+            <StepMarkers points={layer.points} color={layer.colour} />
+            {layer.previews?.map((url, i) =>
+              url && i < layer.points.length ? (
+                <PreviewBillboard key={`${layer.id}-${i}`} position={layer.points[i]} dataUrl={url} />
+              ) : null,
+            )}
+            {layer.points.length > 0 && (
+              <Html position={layer.points[0]} center>
+                <div
+                  className="font-sans whitespace-nowrap pointer-events-none select-none"
+                  style={{ color: layer.colour, fontSize: "9px", letterSpacing: "0.08em", transform: "translate(0, -10px)", opacity: 0.6 }}
+                >
+                  {normalisedLayers.length === 1 ? "start" : `${layer.label} ·`}
+                </div>
+              </Html>
+            )}
+          </group>
+        ))}
         <AutoRotate />
         <OrbitControls enablePan enableZoom enableRotate />
       </Canvas>

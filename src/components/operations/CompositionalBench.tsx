@@ -935,16 +935,38 @@ function BenchDeepDive({ seed, steps, clipThreshold, primaryLabel, rowsA, scores
   const packTableRows: Array<Array<string | number>> = activeTasks.map((t) => [t.id, t.category, t.prompt, t.criterion]);
   const packHeaders = ["task", "category", "prompt", "criterion"];
 
+  function benchDetails(r: BenchRow, lane: "primary" | "compare"): Array<{ label: string; value: string | number }> {
+    const out: Array<{ label: string; value: string | number }> = [
+      { label: "Lane", value: lane },
+      { label: "Task", value: r.task.id },
+      { label: "Category", value: r.task.category },
+      { label: "Prompt", value: r.task.prompt },
+      { label: "Criterion", value: r.task.criterion },
+      { label: "Seed", value: seed },
+      { label: "Steps", value: steps },
+      { label: "Verdict", value: r.verdict ?? "—" },
+    ];
+    if (r.clipScore !== undefined) out.push({ label: "CLIP", value: r.clipScore.toFixed(3) });
+    if (r.meta) {
+      out.push({ label: "Provider", value: r.meta.providerId });
+      out.push({ label: "Model", value: r.meta.modelId });
+      out.push({ label: "Time", value: `${(r.meta.responseTimeMs / 1000).toFixed(1)}s` });
+    }
+    return out;
+  }
+
   const cameraEntries = [
     ...rowsA.filter((r) => r.imageDataUrl).map((r) => ({
       src: r.imageDataUrl as string,
       caption: r.task.id,
       subcaption: `primary · ${r.verdict ?? "—"}${r.clipScore !== undefined ? ` · ${r.clipScore.toFixed(2)}` : ""}`,
+      details: benchDetails(r, "primary"),
     })),
     ...(compareEnabled ? rowsB.filter((r) => r.imageDataUrl).map((r) => ({
       src: r.imageDataUrl as string,
       caption: r.task.id,
       subcaption: `compare · ${r.verdict ?? "—"}${r.clipScore !== undefined ? ` · ${r.clipScore.toFixed(2)}` : ""}`,
+      details: benchDetails(r, "compare"),
     })) : []),
   ];
 

@@ -2,6 +2,7 @@
 
 import { useEffect, useState } from "react";
 import { UMAP } from "umap-js";
+import { X, Plus } from "lucide-react";
 import { useSettings } from "@/context/DiffusionSettingsContext";
 import { useImageBlobCache } from "@/context/ImageBlobCacheContext";
 import { saveRun } from "@/lib/cache/runs";
@@ -17,7 +18,35 @@ import { downloadPdf } from "@/lib/export/pdf";
 import { downloadJson } from "@/lib/export/json";
 import { lookup as lookupTerm, termsFor } from "@/lib/docs/glossary";
 
-type ProjectionKind = "pca" | "umap";
+type ProjectionKind = "pca" | "umap" | "film";
+
+type StepStat = Omit<StepEvent, "event" | "shape" | "latentB64" | "previewDataUrl">;
+
+interface TrajectoryLayer {
+  id: string;
+  label: string;
+  colour: string;
+  visible: boolean;
+  prompt: string;
+  seed: number;
+  steps: number;
+  cfg: number;
+  width: number;
+  height: number;
+  modelId: string;
+  latents: Float32Array[];
+  previews: Array<string | null>;
+  stepStats: StepStat[];
+  finalImage: string | null;
+  responseTimeMs: number | null;
+  points: Point3[]; // re-projected client-side per current projection
+}
+
+const LAYER_COLOURS = ["#7c2d36", "#c9a227", "#2e5d8a", "#3b7d4f", "#8a3b6e", "#5e5e5e"];
+
+function nextColour(i: number): string {
+  return LAYER_COLOURS[i % LAYER_COLOURS.length];
+}
 
 interface StartEvent { event: "start"; meta: Record<string, unknown> }
 interface ModelLoadingEvent { event: "model_loading"; modelId: string; alreadyLoaded: boolean; message: string }
@@ -85,6 +114,7 @@ export function DenoiseTrajectory() {
   const [finalImage, setFinalImage] = useState<string | null>(null);
   const [responseTimeMs, setResponseTimeMs] = useState<number | null>(null);
   const [error, setError] = useState<string | null>(null);
+  const [savedLayers, setSavedLayers] = useState<TrajectoryLayer[]>([]);
 
   const isLocal = settings.backend === "local";
 
@@ -253,6 +283,60 @@ export function DenoiseTrajectory() {
     setRunning(false);
   }
 
+  function saveCurrentAsLayer() {
+    if (latents.length === 0) return;
+    const id = `layer-${Date.now()}`;
+    const idx = savedLayers.length;
+    const layer: TrajectoryLayer = {
+      id,
+      label: `${prompt.slice(0, 32)}${prompt.length > 32 ? "…" : ""} · seed ${seed}`,
+      colour: nextColour(idx),
+      visible: true,
+      prompt, seed, steps, cfg, width, height,
+      modelId: settings.modelId,
+      latents: latents.slice(),
+      previews: previews.slice(),
+      stepStats: stepStats.slice(),
+      finalImage,
+      responseTimeMs,
+      points: points.slice(),
+    };
+    setSavedLayers((prev) => [...prev, layer]);
+  }
+
+  function updateLayer(id: string, patch: Partial<TrajectoryLayer>) {
+    setSavedLayers((prev) => prev.map((l) => (l.id === id ? { ...l, ...patch } : l)));
+  }
+
+  function deleteLayer(id: string) {
+    setSavedLayers((prev) => prev.filter((l) => l.id !== id));
+  }
+
+  // Build the "active" layer (the most recent run, possibly still in flight)
+  // so render and deep-dive code can treat it the same as saved layers.
+  const activeLayer: TrajectoryLayer | null =
+    latents.length > 0
+      ? {
+          id: "active",
+          label: "active run",
+          colour: "#1a1a1a",
+          visible: true,
+          prompt, seed, steps, cfg, width, height,
+          modelId: settings.modelId,
+          latents,
+          previews,
+          stepStats,
+          finalImage,
+          responseTimeMs,
+          points,
+        }
+      : null;
+
+  const visibleLayers = [
+    ...savedLayers.filter((l) => l.visible),
+    ...(activeLayer ? [activeLayer] : []),
+  ];
+
   return (
     <div className="card-editorial p-6 max-w-5xl">
       <h2 className="font-display text-display-md font-bold text-burgundy mb-2">Denoise Trajectory</h2>
@@ -357,7 +441,55 @@ export function DenoiseTrajectory() {
         </div>
       </div>
 
-      <div className="flex items-center gap-3 mb-4">
+      {savedLayers.length > 0 && (
+        <div className="border border-parchment rounded-sm bg-cream/20 p-3 mb-4">
+          <h3 className="font-sans text-caption uppercase tracking-wider text-muted-foreground mb-2">
+            Layers · {savedLayers.length} saved
+            <span className="ml-2 italic normal-case tracking-normal">toggle, rename, or remove. Visible layers overlay in the 3D / Film views.</span>
+          </h3>
+          <div className="space-y-1.5">
+            {savedLayers.map((layer) => (
+              <div key={layer.id} className="flex items-center gap-2 text-caption">
+                <input
+                  type="checkbox"
+                  checked={layer.visible}
+                  onChange={(e) => updateLayer(layer.id, { visible: e.target.checked })}
+                  title="Show / hide this layer"
+                />
+                <span
+                  className="inline-block w-3 h-3 rounded-full flex-shrink-0"
+                  style={{ background: layer.colour }}
+                  title="Layer colour"
+                />
+                <input
+                  type="text"
+                  value={layer.label}
+                  onChange={(e) => updateLayer(layer.id, { label: e.target.value })}
+                  className="input-editorial py-0.5 text-caption flex-1 min-w-0"
+                />
+                <span className="font-sans text-caption text-muted-foreground">
+                  {layer.latents.length} steps · seed {layer.seed} · {layer.modelId.split("/").pop()}
+                </span>
+                <button
+                  onClick={() => deleteLayer(layer.id)}
+                  className="btn-editorial-ghost p-1"
+                  title="Delete layer"
+                >
+                  <X size={12} />
+                </button>
+              </div>
+            ))}
+            <button
+              onClick={() => setSavedLayers([])}
+              className="font-sans text-caption text-burgundy hover:text-burgundy-900 underline underline-offset-2 mt-1"
+            >
+              Clear all layers
+            </button>
+          </div>
+        </div>
+      )}
+
+      <div className="flex items-center gap-3 mb-4 flex-wrap">
         <button
           onClick={() => void run()}
           disabled={running || !isLocal}
@@ -369,6 +501,15 @@ export function DenoiseTrajectory() {
               : `Streaming step ${progress?.done ?? 0}/${progress?.total ?? steps}…`
             : `Run trajectory (${steps} steps)`}
         </button>
+        {latents.length > 0 && !running && (
+          <button
+            onClick={saveCurrentAsLayer}
+            className="btn-editorial-secondary px-3 py-2 flex items-center gap-1"
+            title="Save the current run as a comparison layer. Run another prompt and they will overlay in the 3D / Film views."
+          >
+            <Plus size={14} /> Save as layer
+          </button>
+        )}
         <span className="font-sans text-caption text-muted-foreground">
           {settings.backend === "local" ? "Local" : "Hosted"} · {settings.providerId} · {settings.modelId}
         </span>
@@ -402,6 +543,13 @@ export function DenoiseTrajectory() {
               >
                 UMAP
               </button>
+              <button
+                onClick={() => setProjection("film")}
+                className={projection === "film" ? "btn-editorial-primary px-3 py-1 text-caption" : "btn-editorial-secondary px-3 py-1 text-caption"}
+                title="35mm film-strip view: scroll through every captured step in order, with per-step scalars underneath each frame."
+              >
+                Film
+              </button>
               {responseTimeMs !== null && (
                 <span className="font-sans text-caption text-muted-foreground ml-2">
                   {(responseTimeMs / 1000).toFixed(1)}s total
@@ -412,8 +560,37 @@ export function DenoiseTrajectory() {
           <p className="font-sans text-caption italic text-muted-foreground mb-2">
             PCA and UMAP show different curves because they answer different questions. PCA is a linear projection onto the three directions of greatest variance, so it preserves <em>global</em> distances — long stretches of the trajectory keep their relative scale. UMAP is a non-linear method that preserves <em>local</em> neighbourhood structure at the cost of distorting global distances — it can pull apart steps that PCA bunches together when they sit on different parts of a curved surface. Same trajectory, two views: PCA reads it as a path, UMAP reads it as a topology. Disagreement between them is itself a finding about the manifold's local curvature.
           </p>
-          {points.length >= 2 ? (
-            <TrajectoryThree points={points} previews={previews} />
+          {projection === "film" && visibleLayers.length > 0 ? (
+            <div className="space-y-3">
+              {visibleLayers.map((l) => (
+                <div key={l.id}>
+                  {visibleLayers.length > 1 && (
+                    <div className="font-sans text-caption text-muted-foreground mb-1 flex items-center gap-2">
+                      <span className="inline-block w-3 h-3 rounded-full flex-shrink-0" style={{ background: l.colour }} />
+                      {l.label}
+                    </div>
+                  )}
+                  <FilmStrip
+                    previews={l.previews}
+                    latents={l.latents}
+                    stepStats={l.stepStats}
+                    cfg={l.cfg}
+                  />
+                </div>
+              ))}
+            </div>
+          ) : visibleLayers.some((l) => l.points.length >= 2) ? (
+            <TrajectoryThree
+              layers={visibleLayers
+                .filter((l) => l.points.length >= 2)
+                .map((l) => ({
+                  id: l.id,
+                  label: l.label,
+                  colour: l.colour,
+                  points: l.points,
+                  previews: l.previews,
+                }))}
+            />
           ) : (
             <div className="border border-parchment bg-cream/30 p-8 text-center font-sans text-body-sm text-muted-foreground rounded-sm">
               {running ? (
@@ -601,11 +778,50 @@ function TrajectoryDeepDive({ prompt, seed, steps, cfg, modelId, latents, previe
     });
   }
 
-  const cameraEntries: Array<{ src: string; caption?: string; subcaption?: string }> = [];
+  // Camera roll: each preview thumbnail + the final image, with rich
+  // per-step metadata attached so clicking a frame opens the full detail.
+  const cameraEntries: Array<{
+    src: string;
+    caption?: string;
+    subcaption?: string;
+    details?: Array<{ label: string; value: string | number }>;
+  }> = [];
   previews.forEach((url, i) => {
-    if (url) cameraEntries.push({ src: url, caption: `step ${i + 1}`, subcaption: "preview" });
+    if (!url) return;
+    const stat = stepStats[i] ?? {};
+    const details: Array<{ label: string; value: string | number }> = [
+      { label: "Step", value: i + 1 },
+      { label: "CFG", value: cfg },
+    ];
+    if (stat.timestep != null) details.push({ label: "Timestep", value: stat.timestep.toFixed(2) });
+    if (stat.sigma != null) details.push({ label: "Sigma", value: stat.sigma.toFixed(4) });
+    if (stat.latentNorm != null) details.push({ label: "‖z‖", value: stat.latentNorm.toFixed(4) });
+    if (stat.latentMean != null) details.push({ label: "Mean", value: stat.latentMean.toFixed(4) });
+    if (stat.latentStd != null) details.push({ label: "Std", value: stat.latentStd.toFixed(4) });
+    if (stat.latentMin != null) details.push({ label: "Min", value: stat.latentMin.toFixed(4) });
+    if (stat.latentMax != null) details.push({ label: "Max", value: stat.latentMax.toFixed(4) });
+    cameraEntries.push({
+      src: url,
+      caption: `step ${i + 1}`,
+      subcaption: "preview · click for stats",
+      details,
+    });
   });
-  if (finalImage) cameraEntries.push({ src: finalImage, caption: "final", subcaption: `${steps} steps` });
+  if (finalImage) {
+    cameraEntries.push({
+      src: finalImage,
+      caption: "final",
+      subcaption: `${steps} steps`,
+      details: [
+        { label: "Prompt", value: prompt },
+        { label: "Seed", value: seed },
+        { label: "Steps", value: steps },
+        { label: "CFG", value: cfg },
+        { label: "Model", value: modelId },
+        ...(responseTimeMs !== null ? [{ label: "Time", value: `${(responseTimeMs / 1000).toFixed(1)}s` }] : []),
+      ],
+    });
+  }
 
   return (
     <DeepDive actions={<ExportButtons onCsv={exportCsv} onPdf={exportPdf} onJson={exportJson} />}>
@@ -622,6 +838,119 @@ function TrajectoryDeepDive({ prompt, seed, steps, cfg, modelId, latents, previe
         <StepInspector richRows={richRows} cfg={cfg} />
       </div>
     </DeepDive>
+  );
+}
+
+/**
+ * 35mm-style film strip: every captured step in order, scrollable
+ * horizontally, with per-step scalars under each frame. Sprockets and
+ * background styled to evoke a contact sheet rather than a UI panel.
+ */
+function FilmStrip({
+  previews,
+  latents,
+  stepStats,
+  cfg,
+}: {
+  previews: Array<string | null>;
+  latents: Float32Array[];
+  stepStats: Array<Omit<StepEvent, "event" | "shape" | "latentB64" | "previewDataUrl">>;
+  cfg: number;
+}) {
+  return (
+    <div className="rounded-sm border border-parchment overflow-hidden bg-[#111] py-3">
+      {/* Top sprocket holes */}
+      <div className="flex gap-3 px-3 mb-2">
+        {Array.from({ length: Math.max(latents.length * 2, 12) }).map((_, i) => (
+          <span
+            key={`top-${i}`}
+            className="block w-3 h-2 bg-[#222] rounded-[1px] flex-shrink-0"
+          />
+        ))}
+      </div>
+
+      <div className="overflow-x-auto px-3">
+        <div className="flex gap-3 items-start">
+          {latents.map((_, i) => {
+            const preview = previews[i];
+            const stat = stepStats[i];
+            return (
+              <div
+                key={i}
+                className="flex-shrink-0 flex flex-col items-stretch"
+                style={{ width: "150px" }}
+              >
+                <div className="bg-black aspect-square border-2 border-[#0a0a0a] rounded-sm overflow-hidden flex items-center justify-center">
+                  {preview ? (
+                    // eslint-disable-next-line @next/next/no-img-element
+                    <img src={preview} alt={`step ${i + 1}`} className="w-full h-full object-cover" />
+                  ) : (
+                    <div className="text-[10px] text-[#666] font-mono uppercase tracking-wider">
+                      no preview
+                    </div>
+                  )}
+                </div>
+                <div className="bg-[#0d0d0d] text-[#d4d4d4] font-mono text-[10px] leading-tight px-2 py-1.5 mt-1 rounded-sm">
+                  <div className="flex justify-between">
+                    <span className="text-[#888]">step</span>
+                    <span>{i + 1}</span>
+                  </div>
+                  {stat?.timestep != null && (
+                    <div className="flex justify-between">
+                      <span className="text-[#888]">t</span>
+                      <span>{stat.timestep.toFixed(0)}</span>
+                    </div>
+                  )}
+                  {stat?.sigma != null && (
+                    <div className="flex justify-between">
+                      <span className="text-[#888]">σ</span>
+                      <span>{stat.sigma.toFixed(2)}</span>
+                    </div>
+                  )}
+                  {stat?.latentNorm != null && (
+                    <div className="flex justify-between">
+                      <span className="text-[#888]">‖z‖</span>
+                      <span>{stat.latentNorm.toFixed(2)}</span>
+                    </div>
+                  )}
+                  {stat?.latentMean != null && (
+                    <div className="flex justify-between">
+                      <span className="text-[#888]">μ</span>
+                      <span>{stat.latentMean.toFixed(3)}</span>
+                    </div>
+                  )}
+                  {stat?.latentStd != null && (
+                    <div className="flex justify-between">
+                      <span className="text-[#888]">std</span>
+                      <span>{stat.latentStd.toFixed(2)}</span>
+                    </div>
+                  )}
+                  <div className="flex justify-between mt-0.5">
+                    <span className="text-[#666]">cfg</span>
+                    <span className="text-[#888]">{cfg}</span>
+                  </div>
+                </div>
+              </div>
+            );
+          })}
+        </div>
+      </div>
+
+      {/* Bottom sprocket holes */}
+      <div className="flex gap-3 px-3 mt-2">
+        {Array.from({ length: Math.max(latents.length * 2, 12) }).map((_, i) => (
+          <span
+            key={`bot-${i}`}
+            className="block w-3 h-2 bg-[#222] rounded-[1px] flex-shrink-0"
+          />
+        ))}
+      </div>
+
+      <div className="px-3 mt-2 font-mono text-[9px] text-[#555] uppercase tracking-wider flex items-center justify-between">
+        <span>diffusion-atlas · contact sheet</span>
+        <span>{latents.length} frames · scroll →</span>
+      </div>
+    </div>
   );
 }
 

@@ -525,17 +525,37 @@ function NeighbourDeepDive({ prompt, anchor, k, radius, steps, primaryLabel, row
     });
   }
 
+  function nbrDetails(r: NeighbourRow, lane: "primary" | "compare", isAnchor: boolean): Array<{ label: string; value: string | number }> {
+    const out: Array<{ label: string; value: string | number }> = [
+      { label: "Lane", value: lane },
+      { label: "Role", value: isAnchor ? "anchor" : "neighbour" },
+      { label: "Seed", value: r.seed },
+      { label: "Anchor", value: anchor },
+      { label: "Radius", value: radius },
+      { label: "Prompt", value: prompt },
+      { label: "Steps", value: steps },
+    ];
+    if (r.meta) {
+      out.push({ label: "Provider", value: r.meta.providerId });
+      out.push({ label: "Model", value: r.meta.modelId });
+      out.push({ label: "Time", value: `${(r.meta.responseTimeMs / 1000).toFixed(1)}s` });
+    }
+    return out;
+  }
+
   const cameraEntries = [
-    ...rowsA.filter((r) => r.imageDataUrl).map((r, i) => ({
+    ...rowsA.map((r, i) => r.imageDataUrl ? {
       src: r.imageDataUrl as string,
       caption: `seed ${r.seed}${i === 0 ? " · anchor" : ""}`,
       subcaption: "primary",
-    })),
-    ...(compareEnabled ? rowsB.filter((r) => r.imageDataUrl).map((r, i) => ({
+      details: nbrDetails(r, "primary", i === 0),
+    } : null).filter((e): e is NonNullable<typeof e> => e !== null),
+    ...(compareEnabled ? rowsB.map((r, i) => r.imageDataUrl ? {
       src: r.imageDataUrl as string,
       caption: `seed ${r.seed}${i === 0 ? " · anchor" : ""}`,
       subcaption: "compare",
-    })) : []),
+      details: nbrDetails(r, "compare", i === 0),
+    } : null).filter((e): e is NonNullable<typeof e> => e !== null) : []),
   ];
 
   return (

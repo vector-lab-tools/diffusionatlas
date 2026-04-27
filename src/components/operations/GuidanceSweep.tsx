@@ -610,17 +610,36 @@ function SweepDeepDive({ prompt, seed, steps, primaryLabel, rowsA, driftA, compa
     });
   }
 
+  function rowDetails(r: SweepRow, lane: "primary" | "compare", driftVal: number | null | undefined): Array<{ label: string; value: string | number }> {
+    const out: Array<{ label: string; value: string | number }> = [
+      { label: "Lane", value: lane },
+      { label: "CFG", value: r.cfg },
+      { label: "Prompt", value: prompt },
+      { label: "Seed", value: seed },
+      { label: "Steps", value: steps },
+    ];
+    if (r.meta) {
+      out.push({ label: "Provider", value: r.meta.providerId });
+      out.push({ label: "Model", value: r.meta.modelId });
+      out.push({ label: "Time", value: `${(r.meta.responseTimeMs / 1000).toFixed(1)}s` });
+    }
+    if (driftVal != null) out.push({ label: "Drift", value: driftVal.toFixed(3) });
+    return out;
+  }
+
   const cameraEntries = [
-    ...rowsA.filter((r) => r.imageDataUrl).map((r) => ({
+    ...rowsA.map((r, i) => r.imageDataUrl ? {
       src: r.imageDataUrl as string,
       caption: `CFG ${r.cfg}`,
       subcaption: `primary · ${r.meta?.responseTimeMs != null ? `${(r.meta.responseTimeMs / 1000).toFixed(1)}s` : ""}`,
-    })),
-    ...(compareEnabled ? rowsB.filter((r) => r.imageDataUrl).map((r) => ({
+      details: rowDetails(r, "primary", driftA?.[i] ?? null),
+    } : null).filter((e): e is NonNullable<typeof e> => e !== null),
+    ...(compareEnabled ? rowsB.map((r, i) => r.imageDataUrl ? {
       src: r.imageDataUrl as string,
       caption: `CFG ${r.cfg}`,
       subcaption: `compare · ${r.meta?.responseTimeMs != null ? `${(r.meta.responseTimeMs / 1000).toFixed(1)}s` : ""}`,
-    })) : []),
+      details: rowDetails(r, "compare", driftB?.[i] ?? null),
+    } : null).filter((e): e is NonNullable<typeof e> => e !== null) : []),
   ];
 
   return (
