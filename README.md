@@ -11,7 +11,7 @@
 
 **Author:** David M. Berry
 **Institution:** University of Sussex
-**Version:** 0.3.8
+**Version:** 0.3.9
 **Date:** 28 April 2026
 **Licence:** MIT
 
@@ -238,9 +238,9 @@ The Atlas operations test specific claims of the framework. Denoise Trajectory m
 - [x] Per-step preview decoding, scrubber, camera roll modal, and image-statistics panel with R/G/B/Luma histograms (v0.3.3 – v0.3.6)
 - [x] Trajectory deep-dive expands per layer; per-frame metadata strip + clickable RGB histograms; smaller modals (v0.3.7)
 - [x] **Temp-vs-locked layer model** with per-row padlock toggle, **shuffle/increment seed modes** with per-mode dice animations, **DPMSolverMultistepScheduler (DPM++ 2M Karras)** swap to fix the SD 1.5 PNDM `index 1001` bounds bug, **native-resolution auto-snap** in Width/Height selects via a new `BackendHealthContext`, **per-layer PDF grouping**, sticky StatusBar, and IDB-resilience layer with `withDB()` retry-on-close (v0.3.8)
+- [x] **Stop / abort button** for in-flight trajectory runs (AbortController-wired); partial trajectories are kept as temp layers so a stopped run is still inspectable. **Shuffle / increment seed modes propagated** to Guidance Sweep, Latent Neighbourhood, and Compositional Bench, with a `seedRef` pattern that lets in-flight closures pick up the freshly-rolled seed without waiting for React to re-render (v0.3.9)
 - [ ] Clippy / Hackerman easter eggs with diffusion-flavoured quips
 - [ ] Object-detection-based bench scoring (proper GenEval rather than CLIP cosine)
-- [ ] Stop / abort button for in-flight runs (AbortController-wired)
 - [ ] True Gaussian-perturbation neighbourhood mode for the local backend
 - [ ] Together / Stability hosted providers
 - [ ] Attention-map and cross-attention visualisation

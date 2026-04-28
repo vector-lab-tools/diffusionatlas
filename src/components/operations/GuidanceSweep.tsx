@@ -17,7 +17,7 @@ import { downloadPdf } from "@/lib/export/pdf";
 import { downloadJson } from "@/lib/export/json";
 import { lookup as lookupTerm, termsFor } from "@/lib/docs/glossary";
 import { PromptChips, STARTER_PRESETS } from "@/components/shared/PromptChips";
-import { RandomSeedButton } from "@/components/shared/RandomSeedButton";
+import { RandomSeedButton, nextSeed, type SeedMode } from "@/components/shared/RandomSeedButton";
 
 interface DiffuseResponse {
   images: string[];
@@ -126,6 +126,12 @@ export function GuidanceSweep() {
 
   const [prompt, setPrompt] = useState("a red cube on a blue cube, photorealistic");
   const [seed, setSeed] = useState(42);
+  const [seedMode, setSeedMode] = useState<SeedMode>("off");
+  const [seedSpinning, setSeedSpinning] = useState(false);
+  // Ref so callOnce / runOne can read the freshly-rolled seed without
+  // waiting for React to re-render their closures.
+  const seedRef = useRef(seed);
+  useEffect(() => { seedRef.current = seed; }, [seed]);
   const [steps, setSteps] = useState(settings.defaults.steps);
   const [cfgList, setCfgList] = useState(DEFAULT_CFG_SET);
   const [rows, setRows] = useState<SweepRow[]>([]);
@@ -197,7 +203,7 @@ export function GuidanceSweep() {
     const request: DiffusionRequest = {
       modelId: cfg_.modelId,
       prompt,
-      seed,
+      seed: seedRef.current,
       steps: effectiveSteps(steps, settings),
       cfg,
       width: settings.defaults.width,
@@ -242,7 +248,7 @@ export function GuidanceSweep() {
       const r = await callOnce(cfg, cfg_);
       if (r.ok && r.data) {
         const dataUrl = r.data.images[0];
-        const imageKey = `${keyPrefix}::${r.data.meta.providerId}::${r.data.meta.modelId}::${seed}::${steps}::${cfg}::${Date.now()}`;
+        const imageKey = `${keyPrefix}::${r.data.meta.providerId}::${r.data.meta.modelId}::${seedRef.current}::${steps}::${cfg}::${Date.now()}`;
         await cacheImage(imageKey, dataUrlToBlob(dataUrl));
         imageKeyRef.key = imageKey;
         imageKeyRef.meta = r.data.meta;
@@ -321,7 +327,7 @@ export function GuidanceSweep() {
       providerId: providerIdSeen,
       modelId: modelIdSeen,
       prompt,
-      seed,
+      seed: seedRef.current,
       steps,
       cfg: cfgs[0],
       width: settings.defaults.width,
@@ -336,6 +342,17 @@ export function GuidanceSweep() {
     if (cfgs.length === 0) {
       setTopError("Enter at least one CFG value.");
       return;
+    }
+    // Apply shuffle / increment before the sweep starts, so a held seed
+    // walks predictably across runs. Update both state (for the input)
+    // and ref (so the in-flight closures read the fresh value).
+    if (seedMode !== "off") {
+      const fresh = nextSeed(seedMode, seedRef.current);
+      seedRef.current = fresh;
+      setSeed(fresh);
+      setSeedSpinning(true);
+      await new Promise((r) => setTimeout(r, 450));
+      setSeedSpinning(false);
     }
     setRunning(true);
     setTopError(null);
@@ -396,7 +413,12 @@ export function GuidanceSweep() {
                 onChange={(e) => setSeed(parseInt(e.target.value, 10) || 0)}
                 className="input-editorial flex-1 min-w-0"
               />
-              <RandomSeedButton onPick={setSeed} />
+              <RandomSeedButton
+                onPick={setSeed}
+                mode={seedMode}
+                onModeChange={setSeedMode}
+                spinning={seedSpinning}
+              />
             </div>
           </label>
           <label className="block" title={lookupTerm("Steps")}>

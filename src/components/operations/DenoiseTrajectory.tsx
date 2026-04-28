@@ -2,7 +2,7 @@
 
 import { useEffect, useRef, useState } from "react";
 import { UMAP } from "umap-js";
-import { X, Plus, Lock, Unlock } from "lucide-react";
+import { X, Plus, Lock, Unlock, Square } from "lucide-react";
 import { useSettings, effectiveSteps } from "@/context/DiffusionSettingsContext";
 import { useImageBlobCache } from "@/context/ImageBlobCacheContext";
 import { useBackendHealth } from "@/context/BackendHealthContext";
@@ -162,6 +162,10 @@ export function DenoiseTrajectory() {
   // glance which kind of roll happened.
   const [seedMode, setSeedMode] = useState<SeedMode>("off");
   const [seedSpinning, setSeedSpinning] = useState(false);
+
+  // AbortController for in-flight runs. Stored in a ref so the Stop
+  // button can reach the live controller without re-renders.
+  const abortRef = useRef<AbortController | null>(null);
   // 12 is the modern "fast and good" sweet spot for SD 1.5 with the
   // DPMSolverMultistepScheduler ("DPM++ 2M Karras") the backend pins —
   // converges noticeably faster than Euler or PNDM, so 12 steps now
@@ -276,6 +280,10 @@ export function DenoiseTrajectory() {
     setFinalImage(null);
     setResponseTimeMs(null);
 
+    // Fresh AbortController for this run. Stop button calls .abort().
+    const controller = new AbortController();
+    abortRef.current = controller;
+
     let res: Response;
     try {
       res = await fetch(`${settings.localBaseUrl}/trajectory`, {
@@ -291,10 +299,18 @@ export function DenoiseTrajectory() {
           height,
           previewEvery,
         }),
+        signal: controller.signal,
       });
     } catch (err) {
+      if (err instanceof DOMException && err.name === "AbortError") {
+        setStatusMsg("Stopped by user before the backend replied.");
+        setRunning(false);
+        abortRef.current = null;
+        return;
+      }
       setError(`Cannot reach local backend at ${settings.localBaseUrl}. Is uvicorn running? (${err instanceof Error ? err.message : String(err)})`);
       setRunning(false);
+      abortRef.current = null;
       return;
     }
 
@@ -362,12 +378,47 @@ export function DenoiseTrajectory() {
         }
       }
     } catch (err) {
-      streamErr = err instanceof Error ? err.message : String(err);
+      // AbortError from reader.read() when the user clicks Stop is
+      // expected — the controller-aborted branch below handles cleanup.
+      if (!(err instanceof DOMException && err.name === "AbortError")) {
+        streamErr = err instanceof Error ? err.message : String(err);
+      }
+    }
+
+    // User-initiated stop: keep the partial trajectory visible (it can
+    // still be saved as a layer if it has ≥2 steps) but skip the
+    // auto-save block that expects a final image.
+    if (controller.signal.aborted) {
+      setStatusMsg(`Stopped by user at step ${collected.length}/${steps}. Partial trajectory kept.`);
+      setRunning(false);
+      abortRef.current = null;
+      // If we already have ≥2 steps, snapshot them as a temp layer so
+      // the user can still inspect what was captured before the stop.
+      if (collected.length >= 2) {
+        const newLayer: TrajectoryLayer = {
+          id: `layer-${Date.now()}`,
+          label: `${prompt.slice(0, 32)}${prompt.length > 32 ? "…" : ""} · seed ${activeSeed} · stopped @${collected.length}`,
+          colour: "#1a1a1a",
+          visible: true,
+          locked: false,
+          prompt, seed: activeSeed, steps, cfg, width, height,
+          modelId: settings.modelId,
+          latents: collected.slice(),
+          previews: collectedPreviews.slice(),
+          stepStats: collectedStats.slice(),
+          finalImage: null,
+          responseTimeMs: null,
+          points: pca3D(collected),
+        };
+        setSavedLayers((prev) => [newLayer, ...prev.filter((l) => l.locked)]);
+      }
+      return;
     }
 
     if (streamErr) {
       setError(streamErr);
       setRunning(false);
+      abortRef.current = null;
       return;
     }
 
@@ -441,6 +492,11 @@ export function DenoiseTrajectory() {
     }
 
     setRunning(false);
+    abortRef.current = null;
+  }
+
+  function stopRun() {
+    abortRef.current?.abort();
   }
 
   function updateLayer(id: string, patch: Partial<TrajectoryLayer>) {
@@ -712,6 +768,15 @@ export function DenoiseTrajectory() {
               : `Streaming step ${progress?.done ?? 0}/${progress?.total ?? steps}…`
             : `Run trajectory (${steps} steps)`}
         </button>
+        {running && (
+          <button
+            onClick={stopRun}
+            className="px-3 py-2 border border-burgundy bg-burgundy text-cream rounded-sm hover:bg-burgundy-900 flex items-center gap-1.5 font-sans text-body-sm"
+            title="Abort the in-flight run. The partial trajectory captured so far will be kept as a temporary layer if it has at least 2 steps."
+          >
+            <Square size={12} fill="currentColor" /> Stop
+          </button>
+        )}
       </div>
 
       {error && (

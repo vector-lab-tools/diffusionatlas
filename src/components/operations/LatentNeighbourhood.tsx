@@ -1,6 +1,6 @@
 "use client";
 
-import { useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { useSettings, effectiveSteps } from "@/context/DiffusionSettingsContext";
 import { useImageBlobCache } from "@/context/ImageBlobCacheContext";
 import type { DiffusionRequest, DiffusionResultMeta, ProviderId } from "@/lib/providers/types";
@@ -16,7 +16,7 @@ import { downloadPdf } from "@/lib/export/pdf";
 import { downloadJson } from "@/lib/export/json";
 import { lookup as lookupTerm, termsFor } from "@/lib/docs/glossary";
 import { PromptChips, STARTER_PRESETS } from "@/components/shared/PromptChips";
-import { RandomSeedButton } from "@/components/shared/RandomSeedButton";
+import { RandomSeedButton, nextSeed, type SeedMode } from "@/components/shared/RandomSeedButton";
 
 interface DiffuseResponse {
   images: string[];
@@ -81,6 +81,10 @@ export function LatentNeighbourhood() {
 
   const [prompt, setPrompt] = useState("a red cube on a blue cube, photorealistic");
   const [anchor, setAnchor] = useState(42);
+  const [seedMode, setSeedMode] = useState<SeedMode>("off");
+  const [seedSpinning, setSeedSpinning] = useState(false);
+  const anchorRef = useRef(anchor);
+  useEffect(() => { anchorRef.current = anchor; }, [anchor]);
   const [k, setK] = useState(6);
   const [radius, setRadius] = useState(1000);
   const [steps, setSteps] = useState(settings.defaults.steps);
@@ -238,13 +242,13 @@ export function LatentNeighbourhood() {
       providerId: providerIdSeen,
       modelId: modelIdSeen,
       prompt,
-      seed: anchor,
+      seed: anchorRef.current,
       steps,
       cfg,
       width: settings.defaults.width,
       height: settings.defaults.height,
       samples,
-      extra: { k, radius, anchor, seedList: seeds, ...extra },
+      extra: { k, radius, anchor: anchorRef.current, seedList: seeds, ...extra },
     };
     await saveRun(run);
   }
@@ -254,12 +258,24 @@ export function LatentNeighbourhood() {
       setTopError("k must be ≥ 1.");
       return;
     }
+    // Apply shuffle / increment to the anchor before sampling. Update
+    // both state and ref so persisted Run records and saved imageKeys
+    // see the fresh value.
+    let activeAnchor = anchorRef.current;
+    if (seedMode !== "off") {
+      activeAnchor = nextSeed(seedMode, anchorRef.current);
+      anchorRef.current = activeAnchor;
+      setAnchor(activeAnchor);
+      setSeedSpinning(true);
+      await new Promise((r) => setTimeout(r, 450));
+      setSeedSpinning(false);
+    }
     setRunning(true);
     setTopError(null);
     setErrorLink(null);
     if (!compareEnabled) setRowsB([]);
 
-    const seeds = buildSeedSet(anchor, k, radius);
+    const seeds = buildSeedSet(activeAnchor, k, radius);
 
     if (compareEnabled) {
       const [a, b] = await Promise.all([
@@ -310,7 +326,13 @@ export function LatentNeighbourhood() {
                 onChange={(e) => setAnchor(parseInt(e.target.value, 10) || 0)}
                 className="input-editorial flex-1 min-w-0"
               />
-              <RandomSeedButton onPick={setAnchor} title="Roll a fresh random anchor seed (other neighbourhood seeds are deterministic offsets from this one)" />
+              <RandomSeedButton
+                onPick={setAnchor}
+                mode={seedMode}
+                onModeChange={setSeedMode}
+                spinning={seedSpinning}
+                title="Roll a fresh random anchor seed (other neighbourhood seeds are deterministic offsets from this one)"
+              />
             </div>
           </label>
           <label className="block" title={lookupTerm("k samples")}>

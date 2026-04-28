@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { useSettings, effectiveSteps } from "@/context/DiffusionSettingsContext";
 import { useImageBlobCache } from "@/context/ImageBlobCacheContext";
 import type { DiffusionRequest, DiffusionResultMeta, ProviderId } from "@/lib/providers/types";
@@ -18,7 +18,7 @@ import { DeepDive } from "@/components/shared/DeepDive";
 import { Table } from "@/components/shared/Table";
 import { ExportButtons } from "@/components/shared/ExportButtons";
 import { CameraRoll } from "@/components/shared/CameraRoll";
-import { RandomSeedButton } from "@/components/shared/RandomSeedButton";
+import { RandomSeedButton, nextSeed, type SeedMode } from "@/components/shared/RandomSeedButton";
 import { downloadCsv } from "@/lib/export/csv";
 import { downloadPdf } from "@/lib/export/pdf";
 import { downloadJson } from "@/lib/export/json";
@@ -114,6 +114,10 @@ export function CompositionalBench() {
   const { set: cacheImage } = useImageBlobCache();
 
   const [seed, setSeed] = useState(42);
+  const [seedMode, setSeedMode] = useState<SeedMode>("off");
+  const [seedSpinning, setSeedSpinning] = useState(false);
+  const seedRef = useRef(seed);
+  useEffect(() => { seedRef.current = seed; }, [seed]);
   const [steps, setSteps] = useState(settings.defaults.steps);
 
   // Pack selection + editable overrides per pack.
@@ -168,7 +172,7 @@ export function CompositionalBench() {
     const request: DiffusionRequest = {
       modelId: cfg_.modelId,
       prompt,
-      seed,
+      seed: seedRef.current,
       steps: effectiveSteps(steps, settings),
       cfg: settings.defaults.cfg,
       width: settings.defaults.width,
@@ -213,7 +217,7 @@ export function CompositionalBench() {
       const r = await callOnce(task.prompt, cfg_);
       if (r.ok && r.data) {
         const dataUrl = r.data.images[0];
-        const imageKey = `${keyPrefix}::${r.data.meta.providerId}::${r.data.meta.modelId}::${task.id}::${seed}::${Date.now()}`;
+        const imageKey = `${keyPrefix}::${r.data.meta.providerId}::${r.data.meta.modelId}::${task.id}::${seedRef.current}::${Date.now()}`;
         await cacheImage(imageKey, dataUrlToBlob(dataUrl));
         imageKeyRef.key = imageKey;
         imageKeyRef.meta = r.data.meta;
@@ -287,7 +291,7 @@ export function CompositionalBench() {
       providerId: providerIdSeen,
       modelId: modelIdSeen,
       prompt: "(GenEval-lite pack)",
-      seed,
+      seed: seedRef.current,
       steps,
       cfg: settings.defaults.cfg,
       width: settings.defaults.width,
@@ -299,6 +303,17 @@ export function CompositionalBench() {
   }
 
   async function runBench() {
+    // Apply shuffle / increment so a benchmark sweep across seeds is
+    // one click away. Updates state + ref so closures and persisted
+    // run records see the fresh value.
+    if (seedMode !== "off") {
+      const fresh = nextSeed(seedMode, seedRef.current);
+      seedRef.current = fresh;
+      setSeed(fresh);
+      setSeedSpinning(true);
+      await new Promise((r) => setTimeout(r, 450));
+      setSeedSpinning(false);
+    }
     setRunning(true);
     setTopError(null);
     setErrorLink(null);
@@ -459,7 +474,12 @@ export function CompositionalBench() {
               onChange={(e) => setSeed(parseInt(e.target.value, 10) || 0)}
               className="input-editorial flex-1 min-w-0"
             />
-            <RandomSeedButton onPick={setSeed} />
+            <RandomSeedButton
+              onPick={setSeed}
+              mode={seedMode}
+              onModeChange={setSeedMode}
+              spinning={seedSpinning}
+            />
           </div>
         </label>
         <label className="block" title={lookupTerm("Steps")}>
