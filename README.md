@@ -11,7 +11,7 @@
 
 **Author:** David M. Berry
 **Institution:** University of Sussex
-**Version:** 0.3.7
+**Version:** 0.3.8
 **Date:** 28 April 2026
 **Licence:** MIT
 
@@ -52,7 +52,9 @@ The two views run on the same generated images. A finding in Bench (the model fa
 ## Features
 
 ### Denoise Trajectory
-Trace the iterative denoising path through latent space. The local backend streams per-step latents over NDJSON, with a thumbnail decoded through the VAE every Nth step (configurable via the **Preview every** field). The client projects the latents to 3D via PCA and renders the path in Three.js with start (gold) and end (burgundy) markers; thumbnails appear as billboard sprites above their corresponding step markers, so you can see the image taking shape along the curve. Local backend required: hosted providers do not expose intermediate latents.
+Trace the iterative denoising path through latent space. The local backend streams per-step latents over NDJSON, with a thumbnail decoded through the VAE every Nth step (configurable via the **Preview every** field). The client projects the latents to 3D via PCA (or UMAP, or a 35mm-style **Film** view that renders every captured step as a contact sheet with white edge-print metadata strips and clickable RGB histograms per frame). The 3D view renders the path in Three.js with start (gold) and end (burgundy) markers; thumbnails appear as billboard sprites along the curve, with a *Thumbnails every* slider to thin the swarm so the curve geometry stays readable. Local backend required: hosted providers do not expose intermediate latents.
+
+**Temp / locked layers** (v0.3.8): every completed run is automatically added to the layers list as a *temporary* layer (dashed border, italic label, neutral colour). Running again replaces the temp layer so the list does not fill with garbage. Click the padlock to **lock** a layer in place — locked layers survive future runs and gain a palette colour for overlay comparison. The seed input has shuffle/increment toggles next to the dice button: shuffle rolls a fresh random seed before every run; increment bumps the seed by +1 before every run (the standard "walk neighbouring seeds" pattern). The dice spins on shuffle and bumps upward on increment so the kind of roll is legible at a glance.
 
 ### Guidance Sweep
 Generate the same prompt and seed across a list of CFG values (default `1, 2.5, 4, 7.5, 12`). The image grid is keyed by CFG with per-cell status while the run is in flight. The sweep is sequential per lane rather than `Promise.all` so a single failure doesn't tank the run, and rate-limited responses (Replicate's free tier triggers them quickly) are honoured: each cell shows a live `Retrying in Ns` countdown then resumes. A drift curve above each grid plots normalised perceptual-hash distance from the baseline (CFG nearest 7.5), so the controllability surface — and where mode collapse begins — is visible at a glance.
@@ -233,11 +235,14 @@ The Atlas operations test specific claims of the framework. Denoise Trajectory m
 - [x] Cross-backend agreement view in Guidance Sweep (v0.3.0) — same prompt + seed, two providers in parallel, side-by-side grids and drift curves
 - [x] Cross-backend comparison extended to Latent Neighbourhood (v0.3.1)
 - [x] Cross-backend comparison extended to Compositional Bench + Deep Dive panels with CSV/PDF/JSON export across all operations (v0.3.2)
+- [x] Per-step preview decoding, scrubber, camera roll modal, and image-statistics panel with R/G/B/Luma histograms (v0.3.3 – v0.3.6)
+- [x] Trajectory deep-dive expands per layer; per-frame metadata strip + clickable RGB histograms; smaller modals (v0.3.7)
+- [x] **Temp-vs-locked layer model** with per-row padlock toggle, **shuffle/increment seed modes** with per-mode dice animations, **DPMSolverMultistepScheduler (DPM++ 2M Karras)** swap to fix the SD 1.5 PNDM `index 1001` bounds bug, **native-resolution auto-snap** in Width/Height selects via a new `BackendHealthContext`, **per-layer PDF grouping**, sticky StatusBar, and IDB-resilience layer with `withDB()` retry-on-close (v0.3.8)
 - [ ] Clippy / Hackerman easter eggs with diffusion-flavoured quips
 - [ ] Object-detection-based bench scoring (proper GenEval rather than CLIP cosine)
-- [ ] UMAP option for trajectory and neighbourhood
-- [ ] PDF export across operations
-- [ ] Fal.ai / Together / Stability hosted providers
+- [ ] Stop / abort button for in-flight runs (AbortController-wired)
+- [ ] True Gaussian-perturbation neighbourhood mode for the local backend
+- [ ] Together / Stability hosted providers
 - [ ] Attention-map and cross-attention visualisation
 - [ ] h-space steering
 
