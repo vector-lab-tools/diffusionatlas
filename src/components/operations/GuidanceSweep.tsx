@@ -13,13 +13,15 @@ import { DeepDive } from "@/components/shared/DeepDive";
 import { Table } from "@/components/shared/Table";
 import { ExportButtons } from "@/components/shared/ExportButtons";
 import { CameraRoll, FrameModal, type CameraRollEntry } from "@/components/shared/CameraRoll";
+import { ContactSheetFrame, SprocketRow } from "@/components/shared/ContactSheetFrame";
+import { cfgCaption } from "@/components/shared/CfgSelect";
 import { downloadCsv } from "@/lib/export/csv";
 import { downloadPdf } from "@/lib/export/pdf";
 import { downloadJson } from "@/lib/export/json";
 import { lookup as lookupTerm, termsFor } from "@/lib/docs/glossary";
 import { PromptChips, STARTER_PRESETS } from "@/components/shared/PromptChips";
 import { RandomSeedButton, nextSeed, type SeedMode } from "@/components/shared/RandomSeedButton";
-import { WARMUP_LABEL, WARMUP_TOOLTIP, isWarmupMessage } from "@/lib/local/warmup";
+import { WARMUP_LABEL, WARMUP_TOOLTIP, isWarmupMessage, shortenBackendError } from "@/lib/local/warmup";
 import { useBackendHealth } from "@/context/BackendHealthContext";
 
 interface DiffuseResponse {
@@ -43,7 +45,38 @@ interface SweepRow {
   hash?: Hash;
 }
 
-const DEFAULT_CFG_SET = "1, 2.5, 4, 7.5, 12";
+/**
+ * One complete sweep run, persisted as a "layer". The temp/locked
+ * model from DenoiseTrajectory: every completed sweep auto-saves as
+ * unlocked; running again drops existing unlocked layer(s) and pushes
+ * a new one. Click the padlock to keep a layer across future runs.
+ */
+interface SweepLayer {
+  id: string;
+  label: string;
+  colour: string;
+  locked: boolean;
+  visible: boolean;
+  prompt: string;
+  seed: number;
+  steps: number;
+  cfgList: number[];
+  rows: SweepRow[];
+  providerId: ProviderId;
+  modelId: string;
+  /** Distinguishes the two sub-rows when compare-with is on. */
+  lane: "primary" | "compare";
+  createdAt: number;
+}
+
+// Drops the previous 2.5 slot — that value sits in the empirically-
+// fragile low-CFG range where SD 1.5 fp32 on MPS hits NaN-in-VAE on
+// many seed/prompt combinations. 4 still anchors the "soft" end of
+// the surface, 18 shows where amplification crosses into oversaturation.
+const DEFAULT_CFG_SET = "1, 4, 7.5, 12, 18";
+
+const LAYER_COLOURS = ["#7c2d36", "#c9a227", "#2e5d8a", "#3b7d4f", "#8a3b6e", "#5e5e5e"];
+const SWEEP_PERSIST_KEY = "sweep.layers.v1";
 
 function dataUrlToBlob(dataUrl: string): Blob {
   const [header, b64] = dataUrl.split(",");
@@ -79,19 +112,77 @@ function DriftCurve({ cfgs, drift }: { cfgs: number[]; drift: Array<number | nul
     .filter((p): p is string => p !== null);
   const path = points.length >= 2 ? `M ${points.join(" L ")}` : "";
 
+  // Y-axis gridline values (drift is normalised to [0, 1]).
+  const yGrid = [0, 0.25, 0.5, 0.75, 1.0];
+
   return (
     <svg viewBox={`0 0 ${W} ${H}`} className="w-full max-w-2xl">
-      {/* Axes */}
+      {/* Horizontal gridlines + Y-axis tick labels */}
+      {yGrid.map((g) => (
+        <g key={`yg-${g}`}>
+          <line
+            x1={P}
+            y1={yScale(g)}
+            x2={W - P}
+            y2={yScale(g)}
+            stroke="hsl(var(--parchment))"
+            strokeWidth={0.5}
+            strokeDasharray={g === 0 || g === 1 ? "none" : "2,2"}
+          />
+          <text
+            x={P - 4}
+            y={yScale(g) + 3}
+            fontSize={8}
+            fill="hsl(var(--muted-foreground))"
+            fontFamily="sans-serif"
+            textAnchor="end"
+          >
+            {g.toFixed(g === 0 || g === 1 ? 0 : 2)}
+          </text>
+        </g>
+      ))}
+      {/* Vertical gridlines at each CFG sample */}
+      {cfgs.map((cfg, i) => (
+        <g key={`xg-${i}`}>
+          <line
+            x1={xScale(cfg)}
+            y1={P}
+            x2={xScale(cfg)}
+            y2={H - P}
+            stroke="hsl(var(--parchment))"
+            strokeWidth={0.5}
+            strokeDasharray="2,2"
+          />
+          <text
+            x={xScale(cfg)}
+            y={H - P + 10}
+            fontSize={8}
+            fill="hsl(var(--muted-foreground))"
+            fontFamily="sans-serif"
+            textAnchor="middle"
+          >
+            {cfg}
+          </text>
+        </g>
+      ))}
+      {/* Solid axes on top of the grid */}
       <line x1={P} y1={H - P} x2={W - P} y2={H - P} stroke="hsl(var(--parchment-dark))" strokeWidth={1} />
       <line x1={P} y1={P} x2={P} y2={H - P} stroke="hsl(var(--parchment-dark))" strokeWidth={1} />
-      <text x={P} y={H - 4} fontSize={9} fill="hsl(var(--muted-foreground))" fontFamily="sans-serif">
-        CFG {minX}
+      {/* Axis legends */}
+      <text x={W / 2} y={H - 2} fontSize={8} fill="hsl(var(--muted-foreground))" fontFamily="sans-serif" textAnchor="middle">
+        CFG
       </text>
-      <text x={W - P - 16} y={H - 4} fontSize={9} fill="hsl(var(--muted-foreground))" fontFamily="sans-serif">
-        {maxX}
+      <text
+        x={4}
+        y={H / 2}
+        fontSize={8}
+        fill="hsl(var(--muted-foreground))"
+        fontFamily="sans-serif"
+        transform={`rotate(-90 4 ${H / 2})`}
+        textAnchor="middle"
+      >
+        drift
       </text>
-      <text x={2} y={P + 4} fontSize={9} fill="hsl(var(--muted-foreground))" fontFamily="sans-serif">1</text>
-      <text x={2} y={H - P} fontSize={9} fill="hsl(var(--muted-foreground))" fontFamily="sans-serif">0</text>
       {/* Path */}
       {path && <path d={path} fill="none" stroke="hsl(var(--burgundy))" strokeWidth={1.5} />}
       {/* Points */}
@@ -142,11 +233,11 @@ export function GuidanceSweep() {
   // waiting for React to re-render their closures.
   const seedRef = useRef(seed);
   useEffect(() => { seedRef.current = seed; }, [seed]);
-  // Bump to 12 by default — the global 4-step default is tuned for
-  // FLUX-schnell smoke tests; SD 1.5 / SDXL with DPM++ 2M Karras
-  // produces mushy CFG-sweep grids at 4. 12 is the modern fast-and-good
-  // sweet spot.
-  const [steps, setSteps] = useState(Math.max(12, settings.defaults.steps));
+  // 20 default with EulerDiscreteScheduler (the backend pins it because
+  // DPM++ produces NaN on MPS at certain CFGs). 20 Euler ≈ 12 DPM++ in
+  // visual fidelity — necessary for a CFG sweep where you want crisp
+  // images at each value to read drift cleanly.
+  const [steps, setSteps] = useState(Math.max(20, settings.defaults.steps));
   const [cfgList, setCfgList] = useState(DEFAULT_CFG_SET);
   const [rows, setRows] = useState<SweepRow[]>([]);
   const [rowsB, setRowsB] = useState<SweepRow[]>([]);
@@ -707,14 +798,35 @@ function SweepDeepDive({ prompt, seed, steps, primaryLabel, rowsA, driftA, compa
           table: { headers: ["lane", ...headers], rows: appendixRows },
         },
       ],
+      driftCurves: [
+        ...(driftA && driftA.some((d) => d !== null)
+          ? [{ label: primaryLabel, domain: rowsA.map((r) => r.cfg), values: driftA }]
+          : []),
+        ...(compareEnabled && driftB && driftB.some((d) => d !== null)
+          ? [{ label: compareLabel, domain: rowsB.map((r) => r.cfg), values: driftB }]
+          : []),
+      ],
       glossary: termsFor(["Prompt", "Seed", "Steps", "CFG list", "lane", "CFG", "status", "provider", "model", "time", "drift", "error"]),
+      notes: [
+        {
+          title: "Reading the CFG axis (and what 'error' cells mean)",
+          body:
+            "CFG sweeps on SD 1.5 fp32 on Apple Silicon (MPS) sometimes produce all-black cells at specific CFG values — these are NaN failures in the U-Net's attention path, not bugs in the prompt or seed. The pattern reflects how classifier-free guidance arithmetic interacts with fp32 numerical stability:\n\n" +
+            "CFG 1: doesn't actually do CFG arithmetic — the pipeline takes a single prompt-conditioned forward pass with no amplification. No (conditional − unconditional) subtraction, nothing to over-amplify. The safe path.\n\n" +
+            "CFG 4 and above: amplification is large enough that intermediate activations cluster well away from fp32's underflow regions. The numbers stay in well-conditioned parts of the network and the trajectory completes cleanly.\n\n" +
+            "CFG 7.5: same safe regime as 4, with a larger amplitude. This is the conventional default for a reason — it's both visually balanced and numerically robust.\n\n" +
+            "CFG 12 and above: largest amplification, most stable in this sense. Risk shifts from underflow to oversaturation / mode collapse, which is a perceptual problem, not a numerical one.\n\n" +
+            "CFG 2.5 (and the 2-3 range generally): small but non-zero amplification of (conditional − unconditional). Apple's MPS fp32 implementation has subtly different reduction order from CUDA's fp32, particularly inside attention's softmax denominator. That tiny numerical difference compounds across denoising steps; at some intermediate step a single value occasionally overflows. Once one position is NaN, attention spreads it across the whole tensor on the next layer, the VAE decodes NaN to all-zero pixels, and the cell renders black.\n\n" +
+            "Workarounds: try a different seed (the failure is path-dependent — the specific noise + CFG combination that overflows is rare); try CFG 2 or 3 instead of 2.5; switch SD 1.5 to bfloat16 (same exponent range as fp32, half the memory, no overflow). The Diffusion Atlas backend has an opt-in MIXED_PRECISION_VAE flag that uses a different numerical path and often clears these cases.",
+        },
+      ],
     });
   }
 
   function rowDetails(r: SweepRow, lane: "primary" | "compare", driftVal: number | null | undefined): Array<{ label: string; value: string | number }> {
     const out: Array<{ label: string; value: string | number }> = [
       { label: "Lane", value: lane },
-      { label: "CFG", value: r.cfg },
+      { label: "CFG", value: `${r.cfg} (${cfgCaption(r.cfg)})` },
       { label: "Prompt", value: prompt },
       { label: "Seed", value: seed },
       { label: "Steps", value: steps },
@@ -746,6 +858,41 @@ function SweepDeepDive({ prompt, seed, steps, primaryLabel, rowsA, driftA, compa
   return (
     <DeepDive actions={<ExportButtons onCsv={exportCsv} onPdf={exportPdf} onJson={exportJson} />}>
       <div className="space-y-6">
+        {/* Drift curve(s) — moved here from the contact sheet because
+            it's analytical detail, not visual gestalt. The contact
+            sheet stays a pure visual surface; this is where you read
+            the numbers. */}
+        {((driftA && driftA.some((d) => d !== null)) ||
+          (compareEnabled && driftB && driftB.some((d) => d !== null))) && (
+          <div>
+            <h4 className="font-sans text-caption uppercase tracking-wider text-muted-foreground mb-2">
+              Drift curve
+            </h4>
+            <p className="font-sans text-caption text-muted-foreground italic mb-2">
+              Perceptual hash distance from the cell nearest CFG ≈ 7.5 (the
+              conventional baseline). 0 = visually identical to the baseline,
+              1 = maximally different. The curve traces the controllability
+              surface — where it bends sharply, the model's behaviour at that
+              CFG is qualitatively different from the default.
+            </p>
+            {driftA && driftA.some((d) => d !== null) && (
+              <div className="mb-3">
+                <p className="font-sans text-caption text-muted-foreground mb-1">
+                  {primaryLabel}
+                </p>
+                <DriftCurve cfgs={rowsA.map((r) => r.cfg)} drift={driftA} />
+              </div>
+            )}
+            {compareEnabled && driftB && driftB.some((d) => d !== null) && (
+              <div>
+                <p className="font-sans text-caption text-muted-foreground mb-1">
+                  {compareLabel}
+                </p>
+                <DriftCurve cfgs={rowsB.map((r) => r.cfg)} drift={driftB} />
+              </div>
+            )}
+          </div>
+        )}
         <CameraRoll entries={cameraEntries} />
         <Table
           headers={["lane", ...headers]}
@@ -782,7 +929,7 @@ function SweepLane({ label, rows, drift, prompt, seed, modelId, providerId }: Sw
   function entryFor(row: SweepRow): CameraRollEntry {
     const details: Array<{ label: string; value: string | number }> = [
       { label: "Prompt", value: prompt },
-      { label: "CFG", value: row.cfg },
+      { label: "CFG", value: `${row.cfg} (${cfgCaption(row.cfg)})` },
       { label: "Seed", value: seed },
       { label: "Provider", value: providerId },
       { label: "Model", value: modelId },
@@ -798,60 +945,114 @@ function SweepLane({ label, rows, drift, prompt, seed, modelId, providerId }: Sw
     };
   }
 
+  // Contact-sheet styling: dark sprocketed strip with frames in a row,
+  // white edge-print metadata band below with CFG / drift / time per
+  // frame and a tiny clickable RGB histogram. Same metaphor as
+  // DenoiseTrajectory's FilmStrip, just keyed on CFG instead of step.
+  const FRAME_PX = 150;
+  const COL_GAP_PX = 12;
+  const stripMinWidth = rows.length * FRAME_PX + Math.max(0, rows.length - 1) * COL_GAP_PX;
+
   return (
-    <div className="border-t border-parchment pt-4 mt-4">
-      <h3 className="font-sans text-caption uppercase tracking-wider text-muted-foreground mb-2">
-        {label}
-      </h3>
-      {drift && drift.some((d) => d !== null) && (
-        <div className="mb-3">
-          <p className="font-sans text-caption text-muted-foreground mb-1">
-            Drift from CFG ≈ 7.5 baseline (perceptual hash distance)
-          </p>
-          <DriftCurve cfgs={rows.map((r) => r.cfg)} drift={drift} />
-        </div>
-      )}
-      <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-5 gap-3">
-        {rows.map((row, i) => (
-          <div key={i} className="flex flex-col">
-            <div className="aspect-square bg-cream/50 border border-parchment rounded-sm overflow-hidden flex items-center justify-center">
-              {row.status === "ok" && row.imageDataUrl && (
-                <button
-                  type="button"
-                  onClick={() => {
-                    const j = okRows.findIndex((r) => r === row);
-                    if (j >= 0) setOpenIdx(j);
-                  }}
-                  className="w-full h-full block hover:opacity-90 hover:ring-2 hover:ring-burgundy/30 transition-all"
-                  title="Click for full image + RGB histogram + stats"
-                >
-                  {/* eslint-disable-next-line @next/next/no-img-element */}
-                  <img src={row.imageDataUrl} alt={`CFG ${row.cfg}`} className="w-full h-full object-cover" />
-                </button>
-              )}
-              {row.status === "running" && (
-                <span
-                  className={`font-sans text-caption text-muted-foreground text-center px-2 ${isWarmupMessage(row.errorMessage) ? "cursor-help underline decoration-dotted decoration-muted-foreground/40 underline-offset-4" : ""}`}
-                  title={isWarmupMessage(row.errorMessage) ? WARMUP_TOOLTIP : undefined}
-                >
-                  {row.errorMessage ?? "Generating…"}
-                </span>
-              )}
-              {row.status === "pending" && (
-                <span className="font-sans text-caption text-muted-foreground">Queued</span>
-              )}
-              {row.status === "error" && (
-                <span className="font-sans text-caption text-burgundy text-center px-2">
-                  {row.errorMessage ?? "Failed"}
-                </span>
-              )}
+    <div className="rounded-sm border border-parchment overflow-hidden mt-4">
+      <div className="bg-card px-3 py-1.5 flex items-center justify-between border-b border-parchment">
+        <span
+          className="font-mono text-[9px] uppercase tracking-[0.18em]"
+          style={{ color: "#a36b3a" }}
+        >
+          DIFFUSION ATLAS · CFG SWEEP
+        </span>
+        <span className="font-sans text-caption text-muted-foreground">{label}</span>
+      </div>
+
+      <div className="overflow-x-auto">
+        <div style={{ minWidth: `${stripMinWidth + 24}px` }}>
+          <div className="bg-[#111] py-2">
+            <SprocketRow frameCount={rows.length} />
+            <div className="px-3 py-2">
+              <div className="flex items-start" style={{ gap: `${COL_GAP_PX}px` }}>
+                {rows.map((row, i) => (
+                  <div
+                    key={i}
+                    className="flex-shrink-0 bg-black border-2 border-[#0a0a0a] rounded-sm overflow-hidden"
+                    style={{ width: `${FRAME_PX}px`, height: `${FRAME_PX}px` }}
+                  >
+                    {row.status === "ok" && row.imageDataUrl && (
+                      <button
+                        type="button"
+                        onClick={() => {
+                          const j = okRows.findIndex((r) => r === row);
+                          if (j >= 0) setOpenIdx(j);
+                        }}
+                        className="w-full h-full block hover:opacity-90 transition-opacity"
+                        title="Click for full image + RGB histogram + stats"
+                      >
+                        {/* eslint-disable-next-line @next/next/no-img-element */}
+                        <img src={row.imageDataUrl} alt={`CFG ${row.cfg}`} className="w-full h-full object-cover" />
+                      </button>
+                    )}
+                    {row.status === "running" && (
+                      <div className="w-full h-full flex items-center justify-center px-2">
+                        <span
+                          className={`text-[10px] text-[#999] font-mono uppercase tracking-wider text-center leading-tight ${isWarmupMessage(row.errorMessage) ? "cursor-help underline decoration-dotted decoration-[#666]/60 underline-offset-2" : ""}`}
+                          title={isWarmupMessage(row.errorMessage) ? WARMUP_TOOLTIP : undefined}
+                        >
+                          {row.errorMessage ?? "generating…"}
+                        </span>
+                      </div>
+                    )}
+                    {row.status === "pending" && (
+                      <div className="w-full h-full flex items-center justify-center text-[10px] text-[#666] font-mono uppercase tracking-wider">
+                        queued
+                      </div>
+                    )}
+                    {row.status === "error" && (() => {
+                      const { short, full } = shortenBackendError(row.errorMessage);
+                      return (
+                        <div className="w-full h-full flex flex-col items-center justify-center px-2 gap-1" title={full}>
+                          <span className="text-[10px] text-burgundy font-mono uppercase tracking-wider text-center leading-tight">
+                            {short}
+                          </span>
+                          <span className="text-[8px] text-[#888] font-sans italic text-center">
+                            hover for details
+                          </span>
+                        </div>
+                      );
+                    })()}
+                  </div>
+                ))}
+              </div>
             </div>
-            <div className="mt-1 font-sans text-caption text-muted-foreground text-center">
-              CFG <span className="text-foreground font-medium">{row.cfg}</span>
-              {row.meta && <> · {(row.meta.responseTimeMs / 1000).toFixed(1)}s</>}
+            <SprocketRow frameCount={rows.length} />
+          </div>
+
+          <div className="bg-card px-3 py-2 border-t border-parchment">
+            <div className="flex items-start" style={{ gap: `${COL_GAP_PX}px` }}>
+              {rows.map((row, i) => {
+                const driftValue = drift?.[i];
+                const scalars: Array<{ key: string; value: string }> = [];
+                if (driftValue != null) scalars.push({ key: "drift", value: driftValue.toFixed(2) });
+                if (row.meta?.responseTimeMs != null) scalars.push({ key: "time", value: `${(row.meta.responseTimeMs / 1000).toFixed(1)}s` });
+                scalars.push({ key: "seed", value: String(seed) });
+                return (
+                  <ContactSheetFrame
+                    key={i}
+                    width={FRAME_PX}
+                    primary={`CFG ${row.cfg}`}
+                    secondary={row.status === "ok" ? "ok" : row.status}
+                    caption={cfgCaption(row.cfg)}
+                    scalars={scalars}
+                    preview={row.imageDataUrl ?? null}
+                    onOpen={() => {
+                      const j = okRows.findIndex((r) => r === row);
+                      if (j >= 0) setOpenIdx(j);
+                    }}
+                  />
+                );
+              })}
             </div>
           </div>
-        ))}
+        </div>
       </div>
       {openIdx != null && openEntry && (
         <FrameModal

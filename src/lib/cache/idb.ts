@@ -1,7 +1,10 @@
 import { openDB, type IDBPDatabase } from "idb";
 
 const DB_NAME = "diffusion-atlas";
-const DB_VERSION = 2;
+// v3 adds per-operation persistent state stores so the user's
+// Trajectory layers / Sweep stack / Neighbourhood stack / Bench
+// progress survives page reloads and tab switches.
+const DB_VERSION = 3;
 
 let dbPromise: Promise<IDBPDatabase> | null = null;
 
@@ -22,6 +25,11 @@ export function getDB(): Promise<IDBPDatabase> {
         if (!db.objectStoreNames.contains("images")) db.createObjectStore("images");
         if (!db.objectStoreNames.contains("runs")) db.createObjectStore("runs");
         if (!db.objectStoreNames.contains("bench")) db.createObjectStore("bench");
+        // Per-operation persistent state — one entry per operation,
+        // keyed by a constant like "savedLayers". Values are full
+        // operation-state snapshots (Float32Arrays / data URLs /
+        // metadata) saved via structured clone.
+        if (!db.objectStoreNames.contains("op_state")) db.createObjectStore("op_state");
       },
       blocked() {
         // Another connection has the old version open and is blocking

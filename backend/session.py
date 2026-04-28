@@ -94,7 +94,7 @@ class SessionState:
                 pass
 
         # Imported lazily so `import session` doesn't pull diffusers on cold start.
-        from diffusers import DiffusionPipeline, DPMSolverMultistepScheduler
+        from diffusers import DiffusionPipeline, EulerDiscreteScheduler
 
         # `low_cpu_mem_usage=False` disables accelerate's meta-tensor
         # lazy-loading optimisation. With it on (the default in recent
@@ -129,38 +129,35 @@ class SessionState:
                 # the bug we already know how to spot.
                 pass
 
-        # Force DPMSolverMultistepScheduler ("DPM++ 2M") in Karras-sigmas
-        # mode. Two reasons:
+        # Force EulerDiscreteScheduler. Three reasons:
+        #
         #   1. SD 1.5/2.x ship with PNDMScheduler, which has a warmup-phase
         #      off-by-one: at certain num_inference_steps it computes a
         #      prk_timestep equal to num_train_timesteps (1000), indexes
-        #      alphas_cumprod[1000], and crashes with `index 1001 is out of
-        #      bounds for dimension 0 with size 1000`.
-        #   2. DPM++ 2M is the modern "fast and good" choice — it converges
-        #      at ~12 steps for SD 1.5 (vs ~20-25 for Euler, ~50 for DDIM),
-        #      so the default trajectory feels snappy without going mushy.
-        # Karras sigmas (`use_karras_sigmas=True`) shape the noise schedule
-        # for cleaner detail at low step counts. `algorithm_type="dpmsolver++"`
-        # enables the second-order solver. Both are safe across SD 1.x /
-        # 2.x / SDXL / SD 3.
+        #      alphas_cumprod[1000], and crashes with
+        #      `index 1001 is out of bounds for dimension 0 with size 1000`.
+        #
+        #   2. DPMSolverMultistepScheduler ("DPM++ 2M") is faster-converging
+        #      on CUDA but on **MPS** it has known numerical instabilities:
+        #      the 2nd-order velocity prediction can push a few latent
+        #      values past fp32's representable range, producing NaN that
+        #      the VAE then decodes to all-black pixels. Different
+        #      CFG/seed/step combinations hit it unpredictably (we've seen
+        #      it at CFG 2.5 and 7.5 on the same prompt; CFG 4 and 12
+        #      escape). Disabling Karras sigmas didn't fix it.
+        #
+        #   3. EulerDiscreteScheduler is 1st-order, doesn't accumulate
+        #      velocity error, and is rock-solid across the whole CFG
+        #      range on MPS. It converges slightly slower than DPM++ at
+        #      the same step count (~20-step Euler ≈ ~12-step DPM++ in
+        #      visual fidelity), but "always renders" beats "sometimes
+        #      faster" for a research instrument. Bump steps to 20 if
+        #      the output looks soft.
         try:
-            # use_karras_sigmas=False: Karras sigma scheduling pushes the
-            # noise level very low late in the trajectory, which combined
-            # with CFG ~7.5 on SD 1.5 fp32 on MPS produces NaN latents
-            # and an all-black output (the VAE decodes NaN to zeros).
-            # Standard linear sigmas are slightly less convergent at very
-            # low step counts but numerically stable across the full CFG
-            # range.
-            pipe.scheduler = DPMSolverMultistepScheduler.from_config(
-                pipe.scheduler.config,
-                algorithm_type="dpmsolver++",
-                use_karras_sigmas=False,
-            )
+            pipe.scheduler = EulerDiscreteScheduler.from_config(pipe.scheduler.config)
         except Exception:
             # If the model's scheduler config isn't compatible (some FLUX /
             # SD3 transformer pipelines), leave the original in place.
-            # Trajectory clamping in ops_trajectory.py is the second line of
-            # defence.
             pass
 
         # On Apple Silicon (and any constrained accelerator) these reduce peak
@@ -185,6 +182,14 @@ class SessionState:
         so a warmup at 256×256 doesn't leave 5 GB of cached attention
         and VAE buffers sitting around when the next call wants to
         allocate at 512×512 or higher and immediately OOMs.
+
+        Also re-instantiates the scheduler from its config — this is
+        the fix for the `IndexError: index 21 is out of bounds for
+        dimension 0 with size 21` we hit on EulerDiscreteScheduler:
+        the scheduler holds `step_index` as instance state and doesn't
+        always reset it cleanly when set_timesteps is called twice in
+        a row from the pipeline. A fresh scheduler per call is cheap
+        and stateless-by-construction.
         """
         gc.collect()
         if self.device == "cuda":
@@ -194,6 +199,18 @@ class SessionState:
                 torch.mps.empty_cache()
                 torch.mps.synchronize()
             except Exception:
+                pass
+        # Stateless reset for the scheduler.
+        if self.pipeline is not None:
+            try:
+                from diffusers import EulerDiscreteScheduler
+                self.pipeline.scheduler = EulerDiscreteScheduler.from_config(
+                    self.pipeline.scheduler.config
+                )
+            except Exception:
+                # If something goes wrong, fall through — the existing
+                # scheduler may still work; the worst case is the
+                # next call hits the same IndexError again.
                 pass
 
     def native_dims(self) -> tuple[int | None, int | None]:

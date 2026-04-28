@@ -19,7 +19,8 @@ import { Table } from "@/components/shared/Table";
 import { ExportButtons } from "@/components/shared/ExportButtons";
 import { CameraRoll } from "@/components/shared/CameraRoll";
 import { RandomSeedButton, nextSeed, type SeedMode } from "@/components/shared/RandomSeedButton";
-import { WARMUP_LABEL, WARMUP_TOOLTIP, isWarmupMessage } from "@/lib/local/warmup";
+import { CfgSelect } from "@/components/shared/CfgSelect";
+import { WARMUP_LABEL, WARMUP_TOOLTIP, isWarmupMessage, shortenBackendError } from "@/lib/local/warmup";
 import { useBackendHealth } from "@/context/BackendHealthContext";
 import { downloadCsv } from "@/lib/export/csv";
 import { downloadPdf } from "@/lib/export/pdf";
@@ -135,11 +136,12 @@ export function CompositionalBench() {
   const [seedSpinning, setSeedSpinning] = useState(false);
   const seedRef = useRef(seed);
   useEffect(() => { seedRef.current = seed; }, [seed]);
-  // Bench needs higher fidelity than the global 4-step default (which
-  // is tuned for FLUX schnell / fast smoke tests). 12 with DPM++ 2M
-  // Karras gives recognisable images on SD 1.5/SDXL — necessary for
-  // CLIP scoring to discriminate compositional success vs. mush.
-  const [steps, setSteps] = useState(Math.max(12, settings.defaults.steps));
+  // 20 default for SD 1.5/SDXL with the EulerDiscreteScheduler the
+  // backend pins (Euler is the MPS-stable choice — DPM++ produces NaN
+  // at certain CFGs on MPS). CLIP scoring needs crisp images to
+  // discriminate compositional success vs mush, so the slightly slower
+  // Euler convergence is a worthwhile trade.
+  const [steps, setSteps] = useState(Math.max(20, settings.defaults.steps));
   // CFG held constant at 7.5 (the convention) so per-task CLIP scores
   // are comparable. Default may be 0 in settings (FLUX-schnell-tuned),
   // which produces noise on SD 1.5/SDXL — so we floor it here.
@@ -563,23 +565,7 @@ export function CompositionalBench() {
         </label>
         <label className="block" title={lookupTerm("CFG")}>
           <span className="font-sans text-caption uppercase tracking-wider text-muted-foreground cursor-help underline decoration-dotted decoration-muted-foreground/40 underline-offset-4">CFG</span>
-          <input
-            type="number"
-            step="0.5"
-            min={0}
-            max={30}
-            list="cfg-presets-bench"
-            value={cfg}
-            onChange={(e) => setCfg(parseFloat(e.target.value) || 0)}
-            className="input-editorial mt-1"
-          />
-          <datalist id="cfg-presets-bench">
-            <option value="0" label="prompt off" />
-            <option value="1" label="no amplification" />
-            <option value="4" label="soft" />
-            <option value="7.5" label="balanced default" />
-            <option value="12" label="aggressive" />
-          </datalist>
+          <CfgSelect value={cfg} onChange={setCfg} />
         </label>
         <div className="block" title={lookupTerm("Pack size")}>
           <span className="font-sans text-caption uppercase tracking-wider text-muted-foreground cursor-help underline decoration-dotted decoration-muted-foreground/40 underline-offset-4">Pack size</span>
@@ -897,11 +883,17 @@ function BenchLane({ label, rows, scores, clipThreshold, onMark }: BenchLaneProp
               {row.status === "pending" && (
                 <span className="font-sans text-caption text-muted-foreground">Queued</span>
               )}
-              {row.status === "error" && (
-                <span className="font-sans text-caption text-burgundy text-center px-2">
-                  {row.errorMessage ?? "Failed"}
-                </span>
-              )}
+              {row.status === "error" && (() => {
+                const { short, full } = shortenBackendError(row.errorMessage);
+                return (
+                  <span
+                    className="font-sans text-caption text-burgundy text-center px-2 cursor-help underline decoration-dotted decoration-burgundy/50 underline-offset-2"
+                    title={full}
+                  >
+                    {short}
+                  </span>
+                );
+              })()}
             </div>
             <div className="p-2 flex-1 flex flex-col gap-2">
               <div className="font-sans text-caption uppercase tracking-wider text-muted-foreground">

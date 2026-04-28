@@ -45,6 +45,38 @@ export interface PdfGlossaryEntry {
 }
 
 /**
+ * Free-form notes section, rendered below the glossary on the Key page.
+ * Use for op-specific commentary that doesn't fit the term/definition
+ * shape — e.g. why certain CFG cells fail on a particular hardware
+ * stack, or how to interpret a drift curve.
+ */
+export interface PdfNote {
+  title: string;
+  /** Body. `\n\n` separates paragraphs; `\n` is a soft wrap. Bullet
+   * lines starting with "• " or "- " render as visual bullets. */
+  body: string;
+}
+
+/**
+ * A simple per-axis line chart for embedding in the PDF — drawn
+ * natively with jspdf line primitives so we don't have to embed an
+ * SVG-to-PNG roundtrip. Currently used for the Guidance Sweep drift
+ * curve; the shape is general enough that other ops can reuse it.
+ */
+export interface PdfDriftCurve {
+  label: string;
+  caption?: string;
+  /** Domain values (CFG numbers, seed offsets, …). Same length as `values`. */
+  domain: number[];
+  /** Range values in [0, 1], or `null` for missing cells. */
+  values: Array<number | null>;
+  /** X-axis label. Defaults to the chart label. */
+  xAxisLabel?: string;
+  /** Y-axis label. Defaults to "drift". */
+  yAxisLabel?: string;
+}
+
+/**
  * One self-contained block within the PDF — a layer / lane / sweep entry.
  * Images and tables stay together rather than being lumped across the
  * whole document. Newest-first ordering is the caller's responsibility.
@@ -72,6 +104,10 @@ export interface PdfDoc {
   groups?: PdfGroup[];
   /** Definitions for the parameters and column headers used in this doc. */
   glossary?: PdfGlossaryEntry[];
+  /** Op-specific commentary rendered after the glossary on the Key page. */
+  notes?: PdfNote[];
+  /** Drift / line-chart visualisations rendered on their own page block. */
+  driftCurves?: PdfDriftCurve[];
 }
 
 const MARGIN = 14;
@@ -287,7 +323,7 @@ function drawGroups(doc: jsPDF, groups: PdfGroup[]): void {
   });
 }
 
-function drawGlossary(doc: jsPDF, entries: PdfGlossaryEntry[]): void {
+function drawGlossary(doc: jsPDF, entries: PdfGlossaryEntry[], notes?: PdfNote[]): number {
   doc.addPage();
   let y = MARGIN + 4;
   doc.setFont("helvetica", "bold");
@@ -317,6 +353,169 @@ function drawGlossary(doc: jsPDF, entries: PdfGlossaryEntry[]): void {
     const lines = doc.splitTextToSize(entry.definition, PAGE_W - 2 * MARGIN - 30);
     doc.text(lines, MARGIN + 30, y);
     y += Math.max(lines.length * 3.5, 5) + 1;
+  }
+
+  // Free-form notes below the glossary. Rendered with a small heading
+  // per note, then the body — paragraph breaks on `\n\n`, soft wraps
+  // inside paragraphs respected.
+  if (notes && notes.length > 0) {
+    y += 4;
+    doc.setDrawColor(220);
+    doc.line(MARGIN, y, PAGE_W - MARGIN, y);
+    y += 5;
+    for (const note of notes) {
+      y = ensureSpace(doc, y, 14);
+      doc.setFont("helvetica", "bold");
+      doc.setFontSize(10);
+      doc.setTextColor(124, 45, 54);
+      doc.text(note.title, MARGIN, y);
+      y += 5;
+
+      doc.setFont("helvetica", "normal");
+      doc.setFontSize(8);
+      doc.setTextColor(80);
+      const paragraphs = note.body.split(/\n\n+/);
+      for (const para of paragraphs) {
+        const lines = doc.splitTextToSize(para, PAGE_W - 2 * MARGIN);
+        y = ensureSpace(doc, y, lines.length * 3.5 + 2);
+        doc.text(lines, MARGIN, y);
+        y += lines.length * 3.5 + 3;
+      }
+      y += 2;
+    }
+  }
+  return y;
+}
+
+/**
+ * Draw the drift curves on a fresh page. Native jspdf line primitives
+ * — no SVG-to-PNG roundtrip. Mirrors the on-screen DriftCurve: dashed
+ * gridlines at 0 / 0.25 / 0.5 / 0.75 / 1.0 on Y, dashed verticals at
+ * each domain sample, solid axes, burgundy line + point markers, value
+ * labels above each point.
+ */
+function drawDriftCurves(doc: jsPDF, curves: PdfDriftCurve[]): void {
+  if (curves.length === 0) return;
+  doc.addPage();
+  let y = MARGIN + 4;
+
+  doc.setFont("helvetica", "bold");
+  doc.setFontSize(13);
+  doc.setTextColor(124, 45, 54);
+  doc.text("Drift curves", MARGIN, y);
+  y += 5;
+
+  doc.setFont("helvetica", "italic");
+  doc.setFontSize(8);
+  doc.setTextColor(110);
+  const intro =
+    "Perceptual hash distance from the cell nearest CFG ≈ 7.5 (the conventional baseline). " +
+    "0 = visually identical to the baseline, 1 = maximally different. The curve traces the " +
+    "controllability surface — where it bends sharply, the model's behaviour at that CFG is " +
+    "qualitatively different from the default.";
+  const introLines = doc.splitTextToSize(intro, PAGE_W - 2 * MARGIN);
+  doc.text(introLines, MARGIN, y);
+  y += introLines.length * 3.5 + 4;
+
+  for (const c of curves) {
+    const chartW = PAGE_W - 2 * MARGIN;
+    const chartH = 60;
+    const padL = 16;
+    const padR = 8;
+    const padT = 8;
+    const padB = 12;
+    const x0 = MARGIN + padL;
+    const x1 = MARGIN + chartW - padR;
+    const yBase = y + chartH - padB;
+    const yTop = y + padT;
+
+    y = ensureSpace(doc, y, chartH + 12);
+
+    // Title.
+    doc.setFont("helvetica", "bold");
+    doc.setFontSize(9);
+    doc.setTextColor(60);
+    doc.text(c.label, MARGIN, y - 1);
+
+    const minX = Math.min(...c.domain);
+    const maxX = Math.max(...c.domain);
+    const xScale = (x: number) => x0 + ((x - minX) / Math.max(1, maxX - minX)) * (x1 - x0);
+    const yScale = (v: number) => yBase - v * (yBase - yTop);
+
+    // Horizontal gridlines + Y-tick labels.
+    const yTicks = [0, 0.25, 0.5, 0.75, 1.0];
+    doc.setLineWidth(0.1);
+    doc.setFontSize(6);
+    doc.setTextColor(140);
+    for (const t of yTicks) {
+      const py = yScale(t);
+      if (t === 0 || t === 1) {
+        doc.setDrawColor(180);
+        doc.setLineDashPattern([], 0);
+      } else {
+        doc.setDrawColor(220);
+        doc.setLineDashPattern([0.5, 0.5], 0);
+      }
+      doc.line(x0, py, x1, py);
+      doc.text(t.toFixed(t === 0 || t === 1 ? 0 : 2), x0 - 1.5, py + 1, { align: "right" });
+    }
+
+    // Vertical gridlines at each domain value + X-tick labels.
+    doc.setDrawColor(220);
+    doc.setLineDashPattern([0.5, 0.5], 0);
+    for (const dx of c.domain) {
+      const px = xScale(dx);
+      doc.line(px, yTop, px, yBase);
+      doc.text(String(dx), px, yBase + 4, { align: "center" });
+    }
+
+    // Solid axes on top.
+    doc.setLineDashPattern([], 0);
+    doc.setDrawColor(140);
+    doc.setLineWidth(0.3);
+    doc.line(x0, yBase, x1, yBase);
+    doc.line(x0, yTop, x0, yBase);
+
+    // Burgundy line connecting non-null points.
+    doc.setDrawColor(124, 45, 54);
+    doc.setLineWidth(0.6);
+    let prevX: number | null = null;
+    let prevY: number | null = null;
+    for (let i = 0; i < c.domain.length; i++) {
+      const v = c.values[i];
+      if (v == null) continue;
+      const px = xScale(c.domain[i]);
+      const py = yScale(v);
+      if (prevX != null && prevY != null) {
+        doc.line(prevX, prevY, px, py);
+      }
+      prevX = px;
+      prevY = py;
+    }
+
+    // Point markers + value labels.
+    doc.setFillColor(124, 45, 54);
+    doc.setFontSize(6);
+    doc.setTextColor(60);
+    for (let i = 0; i < c.domain.length; i++) {
+      const v = c.values[i];
+      if (v == null) continue;
+      const px = xScale(c.domain[i]);
+      const py = yScale(v);
+      doc.circle(px, py, 0.7, "F");
+      doc.text(v.toFixed(2), px, py - 1.5, { align: "center" });
+    }
+
+    // Axis legends.
+    doc.setFontSize(6);
+    doc.setTextColor(140);
+    doc.text("CFG", (x0 + x1) / 2, yBase + 8, { align: "center" });
+    doc.text("drift", x0 - 6, (yTop + yBase) / 2, {
+      align: "center",
+      angle: 90,
+    });
+
+    y += chartH + 6;
   }
 }
 
@@ -373,8 +572,11 @@ export function buildPdf(payload: PdfDoc): jsPDF {
       drawAppendix(doc, payload.appendix);
     }
   }
-  if (payload.glossary && payload.glossary.length > 0) {
-    drawGlossary(doc, payload.glossary);
+  if (payload.driftCurves && payload.driftCurves.length > 0) {
+    drawDriftCurves(doc, payload.driftCurves);
+  }
+  if ((payload.glossary && payload.glossary.length > 0) || (payload.notes && payload.notes.length > 0)) {
+    drawGlossary(doc, payload.glossary ?? [], payload.notes);
   }
   stampFooters(doc);
   return doc;

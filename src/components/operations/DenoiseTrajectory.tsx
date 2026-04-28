@@ -2,7 +2,7 @@
 
 import { useEffect, useRef, useState } from "react";
 import { UMAP } from "umap-js";
-import { X, Plus, Lock, Unlock, Square } from "lucide-react";
+import { X, Plus, Lock, Unlock, Square, Search, Play } from "lucide-react";
 import { useSettings, effectiveSteps } from "@/context/DiffusionSettingsContext";
 import { useImageBlobCache } from "@/context/ImageBlobCacheContext";
 import { useBackendHealth } from "@/context/BackendHealthContext";
@@ -18,28 +18,32 @@ import { downloadCsv } from "@/lib/export/csv";
 import { downloadPdf } from "@/lib/export/pdf";
 import { downloadJson } from "@/lib/export/json";
 import { computeImageStats } from "@/lib/image/stats";
-import { downloadSvg, escXml } from "@/lib/export/svg";
+import { downloadSvg, downloadPngFromSvg, escXml } from "@/lib/export/svg";
 import { Download } from "lucide-react";
 import { lookup as lookupTerm, termsFor } from "@/lib/docs/glossary";
 import { PromptChips, STARTER_PRESETS } from "@/components/shared/PromptChips";
 import { RandomSeedButton, nextSeed, type SeedMode } from "@/components/shared/RandomSeedButton";
+import { CfgSelect, cfgCaption } from "@/components/shared/CfgSelect";
+import { useLayerStack, type BaseLayer, TEMP_COLOUR } from "@/lib/operations/useLayerStack";
+import { LayerStackPanel } from "@/components/shared/LayerStackPanel";
+
+// IDB key for the persistent layers stack. Bump if the TrajectoryLayer
+// shape changes incompatibly so old snapshots don't crash the loader.
+const TRAJ_PERSIST_KEY = "trajectory.savedLayers.v1";
 
 type ProjectionKind = "pca" | "umap" | "film";
 
 type StepStat = Omit<StepEvent, "event" | "shape" | "latentB64" | "previewDataUrl">;
 
-interface TrajectoryLayer {
-  id: string;
-  label: string;
-  colour: string;
-  visible: boolean;
+interface TrajectoryLayer extends BaseLayer {
   /**
-   * `false` = a temporary layer that will be replaced by the next run.
-   * `true`  = the user has locked this layer in place; subsequent runs
-   *           leave it alone and add their own (initially temporary)
-   *           layer alongside it.
+   * Inherits id / label / colour / visible / locked / createdAt
+   * from BaseLayer (see useLayerStack). The locked semantics:
+   *   • `false` = a temporary layer that will be replaced by the next run.
+   *   • `true`  = the user has locked this layer in place; subsequent runs
+   *               leave it alone and add their own (initially temporary)
+   *               layer alongside it.
    */
-  locked: boolean;
   prompt: string;
   seed: number;
   steps: number;
@@ -175,16 +179,18 @@ export function DenoiseTrajectory() {
   const [batchSize, setBatchSize] = useState(1);
   const [batchProgress, setBatchProgress] = useState<{ done: number; total: number } | null>(null);
   const batchAbortRef = useRef(false);
-  // 12 is the modern "fast and good" sweet spot for SD 1.5 with the
-  // DPMSolverMultistepScheduler ("DPM++ 2M Karras") the backend pins —
-  // converges noticeably faster than Euler or PNDM, so 12 steps now
-  // produces a coherent image where 12 with Euler would be mushy. Bump
-  // to 20-30 for research-grade fidelity once you know what you're after.
-  const [steps, setSteps] = useState(12);
+  // 20-step default with EulerDiscreteScheduler (the backend pins this
+  // because DPM++ 2M produces NaN/black images at specific CFG × seed
+  // combinations on MPS, regardless of Karras sigmas). Euler is slower-
+  // converging than DPM++ at the same step count — 20 Euler ≈ 12 DPM++
+  // in fidelity. Drop to 12-15 for fast smoke tests, bump to 30+ for
+  // research-grade output.
+  const [steps, setSteps] = useState(20);
   const [cfg, setCfg] = useState(7.5);
 
   const [previewEvery, setPreviewEvery] = useState(1);
   const [selectedStep, setSelectedStep] = useState<number | null>(null);
+  const [stepInspectorOpen, setStepInspectorOpen] = useState(false);
 
   // Film is the default — most intuitive read of a trajectory for a researcher
   // unfamiliar with PCA/UMAP. PCA and UMAP remain one click away.
@@ -229,7 +235,20 @@ export function DenoiseTrajectory() {
   const [finalImage, setFinalImage] = useState<string | null>(null);
   const [responseTimeMs, setResponseTimeMs] = useState<number | null>(null);
   const [error, setError] = useState<string | null>(null);
-  const [savedLayers, setSavedLayers] = useState<TrajectoryLayer[]>([]);
+  // Layers stack: temp/locked, palette colours on lock, persisted to
+  // IDB. Generic primitive shared with Sweep / Neighbourhood / Bench
+  // — see `useLayerStack`. The validate function rejects malformed
+  // snapshots from older schema versions.
+  const layerStack = useLayerStack<TrajectoryLayer>(TRAJ_PERSIST_KEY, (stored) => {
+    if (!Array.isArray(stored)) return null;
+    return stored.filter((l): l is TrajectoryLayer =>
+      typeof l === "object" && l !== null && Array.isArray((l as TrajectoryLayer).latents)
+    );
+  });
+  const savedLayers = layerStack.layers;
+  // Compatibility shim: existing run() code uses functional setState
+  // directly. The hook exposes the same setLayers fn.
+  const setSavedLayers = layerStack.setLayers;
 
   const isLocal = settings.backend === "local";
 
@@ -410,6 +429,7 @@ export function DenoiseTrajectory() {
           colour: "#1a1a1a",
           visible: true,
           locked: false,
+          createdAt: Date.now(),
           prompt, seed: activeSeed, steps, cfg, width, height,
           modelId: settings.modelId,
           latents: collected.slice(),
@@ -485,6 +505,7 @@ export function DenoiseTrajectory() {
           colour: lockNow ? nextColour(lockedCount) : "#1a1a1a",
           visible: true,
           locked: lockNow,
+          createdAt: Date.now(),
           prompt,
           seed: activeSeed,
           steps,
@@ -545,33 +566,12 @@ export function DenoiseTrajectory() {
     batchAbortRef.current = false;
   }
 
-  function updateLayer(id: string, patch: Partial<TrajectoryLayer>) {
-    setSavedLayers((prev) => prev.map((l) => (l.id === id ? { ...l, ...patch } : l)));
-  }
-
-  function deleteLayer(id: string) {
-    setSavedLayers((prev) => prev.filter((l) => l.id !== id));
-  }
-
-  /**
-   * Lock a layer in place: gives it a stable colour from the palette so
-   * future temp runs (which use neutral ink) don't visually clash, and
-   * flips its `locked` flag.
-   */
-  function lockLayer(id: string) {
-    setSavedLayers((prev) => {
-      // Pick the next palette colour based on how many already-locked
-      // layers we have, so colours cycle predictably.
-      const lockedCount = prev.filter((l) => l.locked).length;
-      return prev.map((l) =>
-        l.id === id ? { ...l, locked: true, colour: nextColour(lockedCount) } : l,
-      );
-    });
-  }
-
-  function unlockLayer(id: string) {
-    setSavedLayers((prev) => prev.map((l) => (l.id === id ? { ...l, locked: false, colour: "#1a1a1a" } : l)));
-  }
+  // All layer mutations now flow through the shared hook so they
+  // stay in sync with persistence + the temp/locked invariants.
+  const updateLayer = layerStack.updateLayer;
+  const deleteLayer = layerStack.deleteLayer;
+  const lockLayer = layerStack.lockLayer;
+  const unlockLayer = layerStack.unlockLayer;
 
   // The in-flight run is rendered from transient state so the user sees
   // partial latents/previews as they stream. Once `running` flips to
@@ -586,6 +586,7 @@ export function DenoiseTrajectory() {
           colour: "#1a1a1a",
           visible: true,
           locked: false,
+          createdAt: Date.now(),
           prompt, seed, steps, cfg, width, height,
           modelId: settings.modelId,
           latents,
@@ -643,8 +644,11 @@ export function DenoiseTrajectory() {
         <div
           className="grid gap-2"
           style={{
+            // CFG holds a decimal (7.5) + spinner ≥ 96px. "Preview every"
+            // wraps onto two lines under ~88px, so 100px keeps the label
+            // on one line.
             gridTemplateColumns:
-              "minmax(220px, 1.6fr) 72px 72px 88px minmax(108px, 1fr) minmax(108px, 1fr)",
+              "minmax(220px, 1.4fr) 72px 96px 100px minmax(108px, 1fr) minmax(108px, 1fr)",
           }}
         >
           <label className="block" title={lookupTerm("Seed")}>
@@ -677,37 +681,10 @@ export function DenoiseTrajectory() {
           </label>
           <label className="block" title={lookupTerm("CFG")}>
             <span className="font-sans text-caption uppercase tracking-wider text-muted-foreground cursor-help underline decoration-dotted decoration-muted-foreground/40 underline-offset-4">CFG</span>
-            <input
-              type="number"
-              step="0.5"
-              min={0}
-              max={30}
-              list="cfg-presets"
-              value={cfg}
-              onChange={(e) => setCfg(parseFloat(e.target.value) || 0)}
-              className="input-editorial mt-1"
-            />
-            {/* Canonical CFG values — browser surfaces them as a
-                dropdown, but arbitrary numbers still type-in fine. */}
-            <datalist id="cfg-presets">
-              <option value="0" label="prompt off (unconditional)" />
-              <option value="1" label="no amplification" />
-              <option value="2.5" label="atmospheric" />
-              <option value="4" label="soft amplification" />
-              <option value="5" />
-              <option value="6" />
-              <option value="7" />
-              <option value="7.5" label="balanced default" />
-              <option value="8" />
-              <option value="9" />
-              <option value="10" />
-              <option value="12" label="aggressive" />
-              <option value="15" label="mode collapse risk" />
-              <option value="20" label="oversaturated" />
-            </datalist>
+            <CfgSelect value={cfg} onChange={setCfg} />
           </label>
           <label className="block" title="Decode a thumbnail every N steps. 1 = capture every step (richer Deep Dive + step scrubber, ~0.5s extra per step). 0 disables previews entirely. Higher values make the run faster at the cost of less data in the inspector.">
-            <span className="font-sans text-caption uppercase tracking-wider text-muted-foreground cursor-help underline decoration-dotted decoration-muted-foreground/40 underline-offset-4">Preview every</span>
+            <span className="font-sans text-caption uppercase tracking-wider text-muted-foreground cursor-help underline decoration-dotted decoration-muted-foreground/40 underline-offset-4 whitespace-nowrap">Preview every</span>
             <input
               type="number"
               min={0}
@@ -751,80 +728,19 @@ export function DenoiseTrajectory() {
         </p>
       </div>
 
-      {savedLayers.length > 0 && (
-        <div className="border border-parchment rounded-sm bg-cream/20 p-3 mb-4">
-          <h3 className="font-sans text-caption uppercase tracking-wider text-muted-foreground mb-2">
-            Layers · {savedLayers.filter((l) => l.locked).length} locked
-            {savedLayers.some((l) => !l.locked) && <span className="ml-1">· 1 temp</span>}
-            <span className="ml-2 italic normal-case tracking-normal">
-              click the padlock to keep a temp layer; locked layers stay through future runs.
-            </span>
-          </h3>
-          <div className="space-y-1.5">
-            {savedLayers.map((layer) => (
-              <div
-                key={layer.id}
-                className={
-                  "flex items-center gap-2 text-caption rounded-sm " +
-                  (layer.locked
-                    ? ""
-                    : "border border-dashed border-parchment-dark bg-cream/40 px-1 py-0.5")
-                }
-              >
-                <input
-                  type="checkbox"
-                  checked={layer.visible}
-                  onChange={(e) => updateLayer(layer.id, { visible: e.target.checked })}
-                  title="Show / hide this layer"
-                />
-                <span
-                  className="inline-block w-3 h-3 rounded-full flex-shrink-0"
-                  style={{ background: layer.colour }}
-                  title={layer.locked ? "Locked layer · stays across runs" : "Temporary layer · will be replaced by the next run"}
-                />
-                <input
-                  type="text"
-                  value={layer.label}
-                  onChange={(e) => updateLayer(layer.id, { label: e.target.value })}
-                  className={"input-editorial py-0.5 text-caption flex-1 min-w-0" + (layer.locked ? "" : " italic")}
-                />
-                <span className="font-sans text-caption text-muted-foreground">
-                  {!layer.locked && <span className="text-burgundy not-italic mr-2 font-medium uppercase tracking-wider text-[10px]">temp</span>}
-                  {layer.latents.length} steps · seed {layer.seed} · {layer.modelId.split("/").pop()}
-                </span>
-                <button
-                  onClick={() => (layer.locked ? unlockLayer(layer.id) : lockLayer(layer.id))}
-                  className={
-                    layer.locked
-                      ? "btn-editorial-ghost p-1 text-burgundy"
-                      : "btn-editorial-ghost p-1 text-muted-foreground hover:text-burgundy"
-                  }
-                  title={layer.locked
-                    ? "Locked: this layer stays across future runs · click to unlock (will be removed on next run)"
-                    : "Temporary: this layer will be replaced by the next run · click to lock it in place"}
-                  aria-pressed={layer.locked}
-                  aria-label={layer.locked ? "Unlock layer" : "Lock layer"}
-                >
-                  {layer.locked ? <Lock size={12} /> : <Unlock size={12} />}
-                </button>
-                <button
-                  onClick={() => deleteLayer(layer.id)}
-                  className="btn-editorial-ghost p-1"
-                  title="Delete layer"
-                >
-                  <X size={12} />
-                </button>
-              </div>
-            ))}
-            <button
-              onClick={() => setSavedLayers([])}
-              className="font-sans text-caption text-burgundy hover:text-burgundy-900 underline underline-offset-2 mt-1"
-            >
-              Clear all layers
-            </button>
-          </div>
-        </div>
-      )}
+      <LayerStackPanel
+        layers={savedLayers}
+        operationName="Trajectory"
+        onRename={(id, label) => updateLayer(id, { label })}
+        onToggleVisible={(id, visible) => updateLayer(id, { visible })}
+        onLock={lockLayer}
+        onUnlock={unlockLayer}
+        onDelete={deleteLayer}
+        onReset={layerStack.reset}
+        renderMetadata={(l) =>
+          `${l.latents.length} steps · seed ${l.seed} · ${l.modelId.split("/").pop()}`
+        }
+      />
 
       <div className="flex items-center gap-3 mb-4 flex-wrap">
         <button
@@ -925,12 +841,30 @@ export function DenoiseTrajectory() {
             PCA and UMAP show different curves because they answer different questions. PCA is a linear projection onto the three directions of greatest variance, so it preserves <em>global</em> distances — long stretches of the trajectory keep their relative scale. UMAP is a non-linear method that preserves <em>local</em> neighbourhood structure at the cost of distorting global distances — it can pull apart steps that PCA bunches together when they sit on different parts of a curved surface. Same trajectory, two views: PCA reads it as a path, UMAP reads it as a topology. Disagreement between them is itself a finding about the manifold's local curvature.
           </p>
 
-          {/* Step scrubber: drag to retrospectively inspect any step. */}
+          {/* Step inspector — opens a modal with the slider + thumbnail
+              + per-step scalars. Replaces the always-visible scrubber
+              that was crowding the projection view. */}
           {latents.length > 1 && (
-            <StepScrubber
-              total={latents.length}
+            <div className="mb-3 flex items-center gap-3">
+              <button
+                onClick={() => setStepInspectorOpen(true)}
+                className="btn-editorial-secondary px-3 py-1 text-caption flex items-center gap-1.5"
+                title="Open the step inspector to scrub through every captured latent with its preview thumbnail and full scalar stats."
+              >
+                <Search size={12} /> Inspect steps
+              </button>
+              <span className="font-sans text-caption text-muted-foreground italic">
+                {latents.length} of {steps} step{steps !== 1 ? "s" : ""} captured · click to scrub
+              </span>
+            </div>
+          )}
+          {stepInspectorOpen && latents.length > 1 && (
+            <StepScrubberModal
+              captured={latents.length}
+              requestedSteps={steps}
               selected={selectedStep ?? latents.length - 1}
               onChange={setSelectedStep}
+              onClose={() => setStepInspectorOpen(false)}
               previews={previews}
               stepStats={stepStats}
               cfg={cfg}
@@ -1128,7 +1062,7 @@ function buildCameraEntries(layer: TrajectoryLayer): Array<{
     const details: Array<{ label: string; value: string | number }> = [
       { label: "Layer", value: layer.label },
       { label: "Step", value: i + 1 },
-      { label: "CFG", value: layer.cfg },
+      { label: "CFG", value: `${layer.cfg} (${cfgCaption(layer.cfg)})` },
       { label: "Seed", value: layer.seed },
     ];
     if (stat.timestep != null) details.push({ label: "Timestep", value: stat.timestep.toFixed(2) });
@@ -1155,7 +1089,7 @@ function buildCameraEntries(layer: TrajectoryLayer): Array<{
         { label: "Prompt", value: layer.prompt },
         { label: "Seed", value: layer.seed },
         { label: "Steps", value: layer.steps },
-        { label: "CFG", value: layer.cfg },
+        { label: "CFG", value: `${layer.cfg} (${cfgCaption(layer.cfg)})` },
         { label: "Model", value: layer.modelId },
         ...(layer.responseTimeMs !== null ? [{ label: "Time", value: `${(layer.responseTimeMs / 1000).toFixed(1)}s` }] : []),
       ],
@@ -1305,7 +1239,7 @@ function TrajectoryDeepDive({ layers }: TrajectoryDeepDiveProps) {
                 { label: "Prompt", value: headLayer.prompt },
                 { label: "Seed", value: headLayer.seed },
                 { label: "Steps", value: headLayer.steps },
-                { label: "CFG", value: headLayer.cfg },
+                { label: "CFG", value: `${headLayer.cfg} (${cfgCaption(headLayer.cfg)})` },
                 { label: "Latent dim", value: headLayer.latents[0]?.length ?? 0 },
                 ...(headLayer.responseTimeMs !== null
                   ? [{ label: "Total time", value: `${(headLayer.responseTimeMs / 1000).toFixed(1)}s` }]
@@ -1366,62 +1300,262 @@ function TrajectoryDeepDive({ layers }: TrajectoryDeepDiveProps) {
  * and stats. Default position is the latest received step; dragging
  * lets the user scrub backwards and forwards through the trajectory.
  */
-function StepScrubber({
-  total,
+function StepScrubberModal({
+  captured,
+  requestedSteps,
   selected,
   onChange,
+  onClose,
   previews,
   stepStats,
   cfg,
 }: {
-  total: number;
+  /** Number of latents captured so far (slider range = 0..captured-1). */
+  captured: number;
+  /** Total steps requested in the form — what the denominator should show. */
+  requestedSteps: number;
   selected: number;
   onChange: (n: number) => void;
+  onClose: () => void;
   previews: Array<string | null>;
   stepStats: Array<Omit<StepEvent, "event" | "shape" | "latentB64" | "previewDataUrl">>;
   cfg: number;
 }) {
-  const idx = Math.max(0, Math.min(total - 1, selected));
+  const idx = Math.max(0, Math.min(captured - 1, selected));
   const preview = previews[idx];
   const stat = stepStats[idx];
+
+  // RGB histogram for the current step's preview thumbnail. Computed
+  // lazily on selection change; computeImageStats is cached per src so
+  // scrubbing back to a previously-viewed step is instant.
+  const [hist, setHist] = useState<{ r: number[]; g: number[]; b: number[] } | null>(null);
+  useEffect(() => {
+    let cancelled = false;
+    setHist(null);
+    if (!preview) return;
+    void computeImageStats(preview)
+      .then((s) => {
+        if (cancelled) return;
+        setHist({ r: s.histR, g: s.histG, b: s.histB });
+      })
+      .catch(() => undefined);
+    return () => {
+      cancelled = true;
+    };
+  }, [preview]);
+
+  // Auto-playback: advance the selected step every `playbackMs`,
+  // wrapping to 0 when we hit the last captured step. Lets the user
+  // watch the denoising as a small animation rather than dragging the
+  // slider by hand. Dragging the slider doesn't pause — it just seeks
+  // to that index and playback continues from there.
+  const [isPlaying, setIsPlaying] = useState(false);
+  const [playbackMs, setPlaybackMs] = useState(250);
+  useEffect(() => {
+    if (!isPlaying || captured < 2) return;
+    const t = setInterval(() => {
+      onChange((idx + 1) % captured);
+    }, playbackMs);
+    return () => clearInterval(t);
+    // We deliberately depend on `idx` so the next tick is computed
+    // from the current selected index, not a stale snapshot.
+  }, [isPlaying, captured, idx, playbackMs, onChange]);
+  // If the run is still in flight or otherwise didn't capture every
+  // requested step, show that explicitly so "Step 12 of 20 · capturing"
+  // reads correctly mid-stream and "Step 16 of 20 (capture stopped)"
+  // reads correctly after a user-initiated abort.
+  const partial = captured < requestedSteps;
   return (
-    <div className="border border-parchment rounded-sm bg-cream/20 p-3 mb-3 grid grid-cols-1 sm:grid-cols-[60px_1fr] gap-3 items-center">
-      <div className="bg-cream/40 border border-parchment rounded-sm overflow-hidden flex items-center justify-center" style={{ width: "60px", height: "60px" }}>
-        {preview ? (
-          // eslint-disable-next-line @next/next/no-img-element
-          <img src={preview} alt={`step ${idx + 1}`} className="w-full h-full object-cover" />
-        ) : (
-          <span className="font-sans text-[10px] text-muted-foreground text-center px-2">
-            no preview at this step (set Preview every = 1 for full coverage)
-          </span>
-        )}
-      </div>
-      <div className="min-w-0">
-        <div className="flex items-center justify-between mb-1">
-          <span className="font-sans text-caption uppercase tracking-wider text-muted-foreground">
-            Step <span className="text-foreground">{idx + 1}</span> of {total}
-          </span>
-          <div className="flex items-center gap-1.5 font-sans text-[10px]">
-            {stat?.timestep != null && <span className="text-muted-foreground">t <span className="text-foreground">{stat.timestep.toFixed(0)}</span></span>}
-            {stat?.sigma != null && <span className="text-muted-foreground">σ <span className="text-foreground">{stat.sigma.toFixed(2)}</span></span>}
-            {stat?.latentNorm != null && <span className="text-muted-foreground">‖z‖ <span className="text-foreground">{stat.latentNorm.toFixed(1)}</span></span>}
-            {stat?.latentMean != null && <span className="text-muted-foreground">μ <span className="text-foreground">{stat.latentMean.toFixed(2)}</span></span>}
-            {stat?.latentStd != null && <span className="text-muted-foreground">std <span className="text-foreground">{stat.latentStd.toFixed(2)}</span></span>}
-            <span className="text-muted-foreground">cfg <span className="text-foreground">{cfg}</span></span>
+    <div
+      className="fixed inset-0 z-50 flex items-center justify-center bg-ink/40 p-4"
+      onClick={onClose}
+    >
+      <div
+        className="card-editorial max-w-3xl w-full p-4"
+        onClick={(e) => e.stopPropagation()}
+      >
+        <div className="flex items-start justify-between mb-3">
+          <div>
+            <h3 className="font-display text-display-md font-bold text-burgundy">
+              Step inspector
+            </h3>
+            <p className="font-sans text-caption text-muted-foreground">
+              Drag the slider to retrospectively walk through every captured
+              latent. Step 1 is near-pure noise; the final step is the
+              destination latent decoded into the result image.
+            </p>
           </div>
+          <button onClick={onClose} className="btn-editorial-ghost px-2 py-1" aria-label="Close">
+            <X size={16} />
+          </button>
         </div>
-        <input
-          type="range"
-          min={0}
-          max={Math.max(0, total - 1)}
-          value={idx}
-          onChange={(e) => onChange(parseInt(e.target.value, 10))}
-          className="w-full"
-          title={`Drag to scrub through ${total} captured steps. Step 1 is near pure noise; step ${total} is the final latent.`}
-        />
-        <div className="flex justify-between font-sans text-[9px] text-muted-foreground mt-0.5">
-          <span>step 1 · noise</span>
-          <span>step {total} · final</span>
+
+        <div className="grid grid-cols-1 sm:grid-cols-[200px_1fr] gap-4 items-start">
+          <div
+            className="bg-cream/40 border border-parchment rounded-sm overflow-hidden flex items-center justify-center"
+            style={{ width: "200px", height: "200px" }}
+          >
+            {preview ? (
+              // eslint-disable-next-line @next/next/no-img-element
+              <img src={preview} alt={`step ${idx + 1}`} className="w-full h-full object-cover" />
+            ) : (
+              <span className="font-sans text-caption text-muted-foreground text-center px-3">
+                no preview at this step
+                <br />
+                <span className="italic">
+                  (set Preview every = 1 in the form for full coverage)
+                </span>
+              </span>
+            )}
+          </div>
+          <div className="min-w-0">
+            <div className="flex items-center justify-between mb-2">
+              <span className="font-sans text-caption uppercase tracking-wider text-muted-foreground">
+                Step <span className="text-foreground">{idx + 1}</span> of {requestedSteps}
+                {partial && (
+                  <span className="ml-1 italic normal-case tracking-normal text-burgundy">
+                    · {captured} captured
+                  </span>
+                )}
+              </span>
+            </div>
+            <input
+              type="range"
+              min={0}
+              max={Math.max(0, captured - 1)}
+              value={idx}
+              onChange={(e) => onChange(parseInt(e.target.value, 10))}
+              className="w-full"
+              title={`Drag to scrub through ${captured} captured steps.`}
+            />
+            <div className="flex justify-between font-sans text-[10px] text-muted-foreground mt-0.5 mb-2">
+              <span>step 1 · noise</span>
+              <span>
+                step {requestedSteps} · final
+                {partial && " (not yet reached)"}
+              </span>
+            </div>
+
+            {/* Play / speed controls. Auto-loops when reaching the
+                final captured step. Dragging the slider while playing
+                seeks but doesn't pause. */}
+            <div className="flex items-center gap-3 mb-3 font-sans text-caption">
+              <button
+                type="button"
+                onClick={() => setIsPlaying((p) => !p)}
+                disabled={captured < 2}
+                className={
+                  isPlaying
+                    ? "px-3 py-1 border border-burgundy bg-burgundy text-cream rounded-sm flex items-center gap-1.5"
+                    : "btn-editorial-secondary px-3 py-1 flex items-center gap-1.5"
+                }
+                title={isPlaying ? "Pause auto-playback" : "Play the denoising trajectory at the chosen speed"}
+              >
+                {isPlaying ? (
+                  <>
+                    <Square size={11} fill="currentColor" /> Stop
+                  </>
+                ) : (
+                  <>
+                    <Play size={11} fill="currentColor" /> Play
+                  </>
+                )}
+              </button>
+              <label
+                className="flex items-center gap-1.5 text-muted-foreground"
+                title="Time between frames during auto-playback. Faster = jumpier; slower = more time per step to read scalars and the histogram."
+              >
+                <span className="uppercase tracking-wider cursor-help underline decoration-dotted decoration-muted-foreground/40 underline-offset-4">
+                  Speed
+                </span>
+                <select
+                  value={playbackMs}
+                  onChange={(e) => setPlaybackMs(parseInt(e.target.value, 10))}
+                  className="input-editorial py-0.5 text-caption"
+                >
+                  <option value={100}>fast (100 ms)</option>
+                  <option value={250}>normal (250 ms)</option>
+                  <option value={500}>slow (500 ms)</option>
+                  <option value={1000}>study (1 s)</option>
+                  <option value={2000}>dwell (2 s)</option>
+                </select>
+              </label>
+              <span className="text-muted-foreground italic ml-auto">
+                {isPlaying ? "looping · click Stop to pause" : "looping playback · drag slider to seek"}
+              </span>
+            </div>
+
+            <dl className="grid grid-cols-[100px_1fr] gap-y-1 font-sans text-caption">
+              <dt className="text-muted-foreground">CFG</dt>
+              <dd className="text-foreground">{cfg}</dd>
+              {stat?.timestep != null && (
+                <>
+                  <dt className="text-muted-foreground">timestep (t)</dt>
+                  <dd className="text-foreground">{stat.timestep.toFixed(2)}</dd>
+                </>
+              )}
+              {stat?.sigma != null && (
+                <>
+                  <dt className="text-muted-foreground">sigma (σ)</dt>
+                  <dd className="text-foreground">{stat.sigma.toFixed(4)}</dd>
+                </>
+              )}
+              {stat?.latentNorm != null && (
+                <>
+                  <dt className="text-muted-foreground">norm (‖z‖)</dt>
+                  <dd className="text-foreground">{stat.latentNorm.toFixed(3)}</dd>
+                </>
+              )}
+              {stat?.latentMean != null && (
+                <>
+                  <dt className="text-muted-foreground">mean (μ)</dt>
+                  <dd className="text-foreground">{stat.latentMean.toFixed(4)}</dd>
+                </>
+              )}
+              {stat?.latentStd != null && (
+                <>
+                  <dt className="text-muted-foreground">std</dt>
+                  <dd className="text-foreground">{stat.latentStd.toFixed(4)}</dd>
+                </>
+              )}
+              {stat?.latentMin != null && (
+                <>
+                  <dt className="text-muted-foreground">min</dt>
+                  <dd className="text-foreground">{stat.latentMin.toFixed(4)}</dd>
+                </>
+              )}
+              {stat?.latentMax != null && (
+                <>
+                  <dt className="text-muted-foreground">max</dt>
+                  <dd className="text-foreground">{stat.latentMax.toFixed(4)}</dd>
+                </>
+              )}
+            </dl>
+
+            {/* RGB histogram of the current step's preview — Photoshop /
+                Lightroom style overlapping-channel curves with mix-blend
+                multiply, same primitive used in the contact-sheet
+                frames. Empty white box if no preview was captured for
+                this step (set Preview every = 1 in the form). */}
+            <div className="mt-4">
+              <div className="flex items-center gap-3 font-sans text-[10px] text-muted-foreground mb-1">
+                <span className="uppercase tracking-wider">RGB histogram</span>
+                <span className="flex items-center gap-1">
+                  <span className="inline-block w-2 h-2 rounded-sm" style={{ background: "#cd2650" }} />R
+                </span>
+                <span className="flex items-center gap-1">
+                  <span className="inline-block w-2 h-2 rounded-sm" style={{ background: "#3b7d4f" }} />G
+                </span>
+                <span className="flex items-center gap-1">
+                  <span className="inline-block w-2 h-2 rounded-sm" style={{ background: "#2e5d8a" }} />B
+                </span>
+                <span className="ml-auto italic">
+                  {preview ? "of the decoded preview" : "no preview at this step"}
+                </span>
+              </div>
+              <RgbHistogramMini width={400} height={80} hist={hist} />
+            </div>
+          </div>
         </div>
       </div>
     </div>
@@ -1560,10 +1694,17 @@ function FilmStrip({
 }) {
   const [openFrame, setOpenFrame] = useState<{ index: number; entry: CameraRollEntry } | null>(null);
 
-  function exportReel() {
+  function exportReelSvg() {
     const svg = buildFilmReelSvg(previews, latents, stepStats, cfg, prompt, modelId, seed);
     const stamp = new Date().toISOString().replace(/[:.]/g, "-");
     downloadSvg(`film-reel-seed${seed}-${stamp}.svg`, svg);
+  }
+  async function exportReelPng() {
+    const svg = buildFilmReelSvg(previews, latents, stepStats, cfg, prompt, modelId, seed);
+    const stamp = new Date().toISOString().replace(/[:.]/g, "-");
+    // 2× supersample so the rasterised reel reads sharply on Retina /
+    // print. Bump to 3 for genuinely-print-quality output.
+    await downloadPngFromSvg(`film-reel-seed${seed}-${stamp}.png`, svg, 2);
   }
   // Build CameraRollEntry for a frame, used when its metadata block is clicked.
   function entryForFrame(i: number): CameraRollEntry | null {
@@ -1572,7 +1713,7 @@ function FilmStrip({
     const stat = stepStats[i] ?? {};
     const details: Array<{ label: string; value: string | number }> = [
       { label: "Step", value: i + 1 },
-      { label: "CFG", value: cfg },
+      { label: "CFG", value: `${cfg} (${cfgCaption(cfg)})` },
       { label: "Seed", value: seed },
       { label: "Prompt", value: prompt },
     ];
@@ -1602,13 +1743,22 @@ function FilmStrip({
         >
           DIFFUSION ATLAS · CONTACT SHEET
         </span>
-        <button
-          onClick={exportReel}
-          className="font-mono text-[10px] uppercase tracking-wider text-muted-foreground hover:text-foreground transition-colors flex items-center gap-1 border border-parchment-dark hover:border-burgundy rounded-sm px-2 py-0.5"
-          title="Download this film reel as a self-contained SVG. Embeds all preview thumbnails and per-step scalars."
-        >
-          <Download size={10} /> export reel · svg
-        </button>
+        <span className="inline-flex items-stretch gap-1">
+          <button
+            onClick={exportReelSvg}
+            className="font-mono text-[10px] uppercase tracking-wider text-muted-foreground hover:text-foreground transition-colors flex items-center gap-1 border border-parchment-dark hover:border-burgundy rounded-sm px-2 py-0.5"
+            title="Download this film reel as a self-contained SVG. Embeds all preview thumbnails and per-step scalars. Best for editorial layout — vector, scales to any size, but some apps refuse SVG imports."
+          >
+            <Download size={10} /> svg
+          </button>
+          <button
+            onClick={() => void exportReelPng()}
+            className="font-mono text-[10px] uppercase tracking-wider text-muted-foreground hover:text-foreground transition-colors flex items-center gap-1 border border-parchment-dark hover:border-burgundy rounded-sm px-2 py-0.5"
+            title="Download this film reel as a 2× rasterised PNG. Universal compatibility — every app imports PNG. Pixel-grained at the reel's native size; sharpness depends on the source thumbnail resolution."
+          >
+            <Download size={10} /> png
+          </button>
+        </span>
       </div>
 
       {/* Single horizontally-scrolling container so dark strip and white metadata

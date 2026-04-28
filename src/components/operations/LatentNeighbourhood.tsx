@@ -12,13 +12,15 @@ import { DeepDive } from "@/components/shared/DeepDive";
 import { Table } from "@/components/shared/Table";
 import { ExportButtons } from "@/components/shared/ExportButtons";
 import { CameraRoll, FrameModal, type CameraRollEntry } from "@/components/shared/CameraRoll";
+import { ContactSheetFrame, SprocketRow } from "@/components/shared/ContactSheetFrame";
 import { downloadCsv } from "@/lib/export/csv";
 import { downloadPdf } from "@/lib/export/pdf";
 import { downloadJson } from "@/lib/export/json";
 import { lookup as lookupTerm, termsFor } from "@/lib/docs/glossary";
 import { PromptChips, STARTER_PRESETS } from "@/components/shared/PromptChips";
 import { RandomSeedButton, nextSeed, type SeedMode } from "@/components/shared/RandomSeedButton";
-import { WARMUP_LABEL, WARMUP_TOOLTIP, isWarmupMessage } from "@/lib/local/warmup";
+import { CfgSelect } from "@/components/shared/CfgSelect";
+import { WARMUP_LABEL, WARMUP_TOOLTIP, isWarmupMessage, shortenBackendError } from "@/lib/local/warmup";
 import { useBackendHealth } from "@/context/BackendHealthContext";
 
 interface DiffuseResponse {
@@ -94,9 +96,10 @@ export function LatentNeighbourhood() {
   const fetchAbortRef = useRef<AbortController | null>(null);
   const [k, setK] = useState(6);
   const [radius, setRadius] = useState(1000);
-  // 12 default for SD 1.5/SDXL with DPM++ 2M Karras — the global
-  // 4-step default is too low to produce recognisable neighbours.
-  const [steps, setSteps] = useState(Math.max(12, settings.defaults.steps));
+  // 20 default for SD 1.5/SDXL with the EulerDiscreteScheduler the
+  // backend pins (Euler is the MPS-stable choice — DPM++ produces
+  // NaN at certain CFGs on MPS). 20 Euler ≈ 12 DPM++ in fidelity.
+  const [steps, setSteps] = useState(Math.max(20, settings.defaults.steps));
   // CFG held constant across the neighbourhood (the seed is the
   // variable). Default 7.5 — the global default may be 0 because it's
   // tuned for FLUX-schnell, but SD 1.5/SDXL at 0 produces noise.
@@ -413,25 +416,7 @@ export function LatentNeighbourhood() {
           </label>
           <label className="block" title={lookupTerm("CFG")}>
             <span className="font-sans text-caption uppercase tracking-wider text-muted-foreground cursor-help underline decoration-dotted decoration-muted-foreground/40 underline-offset-4">CFG</span>
-            <input
-              type="number"
-              step="0.5"
-              min={0}
-              max={30}
-              list="cfg-presets-nbr"
-              value={cfg}
-              onChange={(e) => setCfg(parseFloat(e.target.value) || 0)}
-              className="input-editorial mt-1"
-            />
-            <datalist id="cfg-presets-nbr">
-              <option value="0" label="prompt off" />
-              <option value="1" label="no amplification" />
-              <option value="2.5" label="atmospheric" />
-              <option value="4" label="soft" />
-              <option value="7.5" label="balanced default" />
-              <option value="12" label="aggressive" />
-              <option value="15" label="mode collapse risk" />
-            </datalist>
+            <CfgSelect value={cfg} onChange={setCfg} />
           </label>
         </div>
         <p className="font-sans text-caption italic text-muted-foreground mt-2">
@@ -718,53 +703,115 @@ function NeighbourLane({ label, rows, prompt, anchor, modelId, providerId }: Nei
   }
   const openEntry = openIdx != null ? entryFor(okRows[openIdx]) : null;
 
+  // Contact-sheet styling: dark sprocketed strip with frames in a row,
+  // white edge-print metadata band below with seed / role / time per
+  // frame and a tiny clickable RGB histogram. Same metaphor as
+  // DenoiseTrajectory's FilmStrip and Guidance Sweep, keyed on seed.
+  const FRAME_PX = 150;
+  const COL_GAP_PX = 12;
+  const stripMinWidth = rows.length * FRAME_PX + Math.max(0, rows.length - 1) * COL_GAP_PX;
+
   return (
-    <div className="border-t border-parchment pt-4 mt-4">
-      <h3 className="font-sans text-caption uppercase tracking-wider text-muted-foreground mb-2">
-        {label}
-      </h3>
-      <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-4 gap-3">
-        {rows.map((row, i) => (
-          <div key={i} className="flex flex-col">
-            <div className="aspect-square bg-cream/50 border border-parchment rounded-sm overflow-hidden flex items-center justify-center">
-              {row.status === "ok" && row.imageDataUrl && (
-                <button
-                  type="button"
-                  onClick={() => {
-                    const j = okRows.findIndex((r) => r === row);
-                    if (j >= 0) setOpenIdx(j);
-                  }}
-                  className="w-full h-full block hover:opacity-90 hover:ring-2 hover:ring-burgundy/30 transition-all"
-                  title="Click for full image + RGB histogram + stats"
-                >
-                  {/* eslint-disable-next-line @next/next/no-img-element */}
-                  <img src={row.imageDataUrl} alt={`seed ${row.seed}`} className="w-full h-full object-cover" />
-                </button>
-              )}
-              {row.status === "running" && (
-                <span
-                  className={`font-sans text-caption text-muted-foreground text-center px-2 ${isWarmupMessage(row.errorMessage) ? "cursor-help underline decoration-dotted decoration-muted-foreground/40 underline-offset-4" : ""}`}
-                  title={isWarmupMessage(row.errorMessage) ? WARMUP_TOOLTIP : undefined}
-                >
-                  {row.errorMessage ?? "Generating…"}
-                </span>
-              )}
-              {row.status === "pending" && (
-                <span className="font-sans text-caption text-muted-foreground">Queued</span>
-              )}
-              {row.status === "error" && (
-                <span className="font-sans text-caption text-burgundy text-center px-2">
-                  {row.errorMessage ?? "Failed"}
-                </span>
-              )}
+    <div className="rounded-sm border border-parchment overflow-hidden mt-4">
+      <div className="bg-card px-3 py-1.5 flex items-center justify-between border-b border-parchment">
+        <span
+          className="font-mono text-[9px] uppercase tracking-[0.18em]"
+          style={{ color: "#a36b3a" }}
+        >
+          DIFFUSION ATLAS · NEIGHBOURHOOD
+        </span>
+        <span className="font-sans text-caption text-muted-foreground">{label}</span>
+      </div>
+
+      <div className="overflow-x-auto">
+        <div style={{ minWidth: `${stripMinWidth + 24}px` }}>
+          <div className="bg-[#111] py-2">
+            <SprocketRow frameCount={rows.length} />
+            <div className="px-3 py-2">
+              <div className="flex items-start" style={{ gap: `${COL_GAP_PX}px` }}>
+                {rows.map((row, i) => (
+                  <div
+                    key={i}
+                    className="flex-shrink-0 bg-black border-2 border-[#0a0a0a] rounded-sm overflow-hidden"
+                    style={{ width: `${FRAME_PX}px`, height: `${FRAME_PX}px` }}
+                  >
+                    {row.status === "ok" && row.imageDataUrl && (
+                      <button
+                        type="button"
+                        onClick={() => {
+                          const j = okRows.findIndex((r) => r === row);
+                          if (j >= 0) setOpenIdx(j);
+                        }}
+                        className="w-full h-full block hover:opacity-90 transition-opacity"
+                        title="Click for full image + RGB histogram + stats"
+                      >
+                        {/* eslint-disable-next-line @next/next/no-img-element */}
+                        <img src={row.imageDataUrl} alt={`seed ${row.seed}`} className="w-full h-full object-cover" />
+                      </button>
+                    )}
+                    {row.status === "running" && (
+                      <div className="w-full h-full flex items-center justify-center px-2">
+                        <span
+                          className={`text-[10px] text-[#999] font-mono uppercase tracking-wider text-center leading-tight ${isWarmupMessage(row.errorMessage) ? "cursor-help underline decoration-dotted decoration-[#666]/60 underline-offset-2" : ""}`}
+                          title={isWarmupMessage(row.errorMessage) ? WARMUP_TOOLTIP : undefined}
+                        >
+                          {row.errorMessage ?? "generating…"}
+                        </span>
+                      </div>
+                    )}
+                    {row.status === "pending" && (
+                      <div className="w-full h-full flex items-center justify-center text-[10px] text-[#666] font-mono uppercase tracking-wider">
+                        queued
+                      </div>
+                    )}
+                    {row.status === "error" && (() => {
+                      const { short, full } = shortenBackendError(row.errorMessage);
+                      return (
+                        <div className="w-full h-full flex flex-col items-center justify-center px-2 gap-1" title={full}>
+                          <span className="text-[10px] text-burgundy font-mono uppercase tracking-wider text-center leading-tight">
+                            {short}
+                          </span>
+                          <span className="text-[8px] text-[#888] font-sans italic text-center">
+                            hover for details
+                          </span>
+                        </div>
+                      );
+                    })()}
+                  </div>
+                ))}
+              </div>
             </div>
-            <div className="mt-1 font-sans text-caption text-muted-foreground text-center">
-              seed <span className="text-foreground font-medium">{row.seed}</span>
-              {i === 0 && <span className="text-burgundy"> · anchor</span>}
-              {row.meta && <> · {(row.meta.responseTimeMs / 1000).toFixed(1)}s</>}
+            <SprocketRow frameCount={rows.length} />
+          </div>
+
+          <div className="bg-card px-3 py-2 border-t border-parchment">
+            <div className="flex items-start" style={{ gap: `${COL_GAP_PX}px` }}>
+              {rows.map((row, i) => {
+                const isAnchor = row.seed === anchor;
+                const scalars: Array<{ key: string; value: string }> = [
+                  { key: "role", value: isAnchor ? "anchor" : "neighbour" },
+                ];
+                if (row.meta?.responseTimeMs != null) {
+                  scalars.push({ key: "time", value: `${(row.meta.responseTimeMs / 1000).toFixed(1)}s` });
+                }
+                return (
+                  <ContactSheetFrame
+                    key={i}
+                    width={FRAME_PX}
+                    primary={`seed ${row.seed}`}
+                    secondary={isAnchor ? "★ anchor" : row.status === "ok" ? "ok" : row.status}
+                    scalars={scalars}
+                    preview={row.imageDataUrl ?? null}
+                    onOpen={() => {
+                      const j = okRows.findIndex((r) => r === row);
+                      if (j >= 0) setOpenIdx(j);
+                    }}
+                  />
+                );
+              })}
             </div>
           </div>
-        ))}
+        </div>
       </div>
       {openIdx != null && openEntry && (
         <FrameModal

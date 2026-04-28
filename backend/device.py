@@ -94,11 +94,18 @@ def dtype_for_model(model_id: str, device: DeviceName) -> torch.dtype:
     # MPS path: lower-case match on the model id to pick a family.
     mid = model_id.lower()
 
-    # Older Stable Diffusion 1.x / 2.x:
-    #   - fp32 by default (the safe option, what we shipped with)
-    #   - fp16 when MIXED_PRECISION_VAE is on — combined with an explicit
-    #     pipe.vae.to(fp32) cast in session.load() this dodges the
-    #     fp16-VAE NaN bug while halving resident weight memory.
+    # Older Stable Diffusion 1.x / 2.x: fp32 on MPS.
+    #   - fp16 has the VAE-NaN underflow bug (5-bit exponent too narrow)
+    #   - bfloat16 has fp32's exponent range BUT only 7-bit mantissa,
+    #     which quantises the 1000-element alphas_cumprod table
+    #     enough to break some scheduler index calculations on MPS
+    #     (saw `index 21 out of bounds for dimension 0 with size 21`
+    #     with EulerDiscrete + bf16 + SD 1.5)
+    #   - fp32 sporadically produces NaN at certain CFG values
+    #     (the 2-3 range) due to MPS attention reduction order, but
+    #     this is path-dependent and avoidable with a different seed
+    # Net: fp32 is the least-bad default. fp16+VAE-fp32 stays
+    # available behind MIXED_PRECISION_VAE=1.
     if "stable-diffusion-v1-" in mid or mid.endswith("/sd-v1"):
         return torch.float16 if MIXED_PRECISION_VAE else torch.float32
     if "stable-diffusion-2" in mid or "stable-diffusion-v2-" in mid:
@@ -129,8 +136,7 @@ def dtype_for_model(model_id: str, device: DeviceName) -> torch.dtype:
 # at 512×512 / 1024×1024 with attention slicing on. Numbers are
 # deliberately conservative: better to refuse a load than crash the OS.
 MODEL_FOOTPRINTS_GB: dict[str, float] = {
-    # SD 1.x / 2.x at fp32 (default on MPS — see dtype_for_model).
-    # If MIXED_PRECISION_VAE is on, real usage is roughly half these.
+    # SD 1.x / 2.x at fp32 on MPS (default — see dtype_for_model).
     "sd1.5": 5.0,
     "sd2": 6.0,
     "sdxl": 7.0,     # bf16

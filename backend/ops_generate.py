@@ -131,11 +131,12 @@ def run(req: GenerateRequest, session_state) -> dict[str, Any]:
                 status_code=500,
                 detail=(
                     "Generation produced an all-black image — almost certainly NaN in the "
-                    "VAE decode. Common cause: DPM++ 2M Karras + SD 1.5 + fp32 on MPS at "
-                    f"CFG {req.cfg} hits a numerical knife-edge late in the trajectory. "
-                    "Try: a different CFG (4 or 12 usually clear it), increase steps "
-                    "(more steps = larger sigmas, more numerical headroom), or set "
-                    "MIXED_PRECISION_VAE=1 on the backend."
+                    "VAE decode. SD 1.5 + fp32 on MPS occasionally produces NaN at specific "
+                    f"(seed × CFG × step-count) combinations regardless of scheduler. "
+                    f"Tried: CFG {req.cfg}, {req.steps} steps. "
+                    "Workarounds: try a different CFG, bump steps higher (more headroom), "
+                    "use a different seed, or set MIXED_PRECISION_VAE=1 on the backend "
+                    "(fp16 U-Net + fp32 VAE — different numerics, often clears these cases)."
                 ),
             )
     except HTTPException:
