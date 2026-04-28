@@ -189,16 +189,29 @@ export function Clippy() {
   const bubbleClass = isHackerman
     ? "bg-black border border-green-500 text-green-400 font-mono"
     : "bg-card border border-parchment-dark text-foreground font-sans";
-  const hintText = isHackerman ? 'type "clippy" to downgrade' : 'type "clippy" to dismiss · "hacker" for h4x0r mode';
-  const characterName = isHackerman ? "h4x0r" : "Clippy";
 
   return (
     <div className="fixed bottom-16 right-4 z-[10000] animate-fade-in pointer-events-none flex flex-col items-end">
       {message && (
         <div
           key={messageKey}
-          className={`mb-2 p-2.5 rounded-sm max-w-[300px] shadow-editorial-md animate-fade-in pointer-events-auto ${bubbleClass}`}
+          className={`relative mb-2 pl-2.5 pr-6 py-2.5 rounded-sm max-w-[300px] shadow-editorial-md animate-fade-in pointer-events-auto ${bubbleClass}`}
         >
+          <button
+            type="button"
+            onClick={() => setVisible(false)}
+            className={`absolute top-1 right-1 w-4 h-4 inline-flex items-center justify-center rounded-sm transition-colors ${
+              isHackerman
+                ? "text-green-500 hover:text-green-300 hover:bg-green-500/10"
+                : "text-muted-foreground hover:text-foreground hover:bg-parchment/60"
+            }`}
+            aria-label="Dismiss Clippy"
+            title="Dismiss"
+          >
+            <svg width="10" height="10" viewBox="0 0 10 10" fill="none">
+              <path d="M2 2 L8 8 M8 2 L2 8" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" />
+            </svg>
+          </button>
           <p className="leading-snug whitespace-pre-line text-[11px]">{message}</p>
         </div>
       )}
@@ -239,20 +252,6 @@ export function Clippy() {
             strokeLinecap="round"
           />
         </svg>
-        </div>
-        <div className="mt-0.5 text-center leading-tight bg-card/95 border border-parchment-dark rounded-sm px-1.5 py-0.5 shadow-editorial">
-          <div
-            className={`font-display text-[10px] italic ${
-              isHackerman ? "text-green-500 font-mono not-italic" : "text-burgundy"
-            }`}
-          >
-            {characterName}
-          </div>
-          <div
-            className={`text-[8px] whitespace-nowrap ${isHackerman ? "text-green-700" : "text-muted-foreground"}`}
-          >
-            {hintText}
-          </div>
         </div>
       </div>
     </div>

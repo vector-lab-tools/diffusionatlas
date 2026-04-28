@@ -96,7 +96,18 @@ class SessionState:
         # Imported lazily so `import session` doesn't pull diffusers on cold start.
         from diffusers import DiffusionPipeline, DPMSolverMultistepScheduler
 
-        pipe = DiffusionPipeline.from_pretrained(model_id, torch_dtype=self.dtype)
+        # `low_cpu_mem_usage=False` disables accelerate's meta-tensor
+        # lazy-loading optimisation. With it on (the default in recent
+        # diffusers), the subsequent `.to(self.device)` errors with
+        # `Cannot copy out of meta tensor; no data!` because the weights
+        # are placeholders until first forward. Loading directly into
+        # RAM is fine on a 24 GB box for SD 1.5/SDXL — peak load memory
+        # is ~5-7 GB which the watermark cap leaves room for.
+        pipe = DiffusionPipeline.from_pretrained(
+            model_id,
+            torch_dtype=self.dtype,
+            low_cpu_mem_usage=False,
+        )
         pipe = pipe.to(self.device)
 
         # Mixed-precision VAE: on SD 1.x/2.x with MIXED_PRECISION_VAE on,
@@ -159,6 +170,24 @@ class SessionState:
 
         self.pipeline = pipe
         self.current_model_id = model_id
+
+    def reset_activation_cache(self) -> None:
+        """
+        Drop any allocator-cached buffers from previous forward passes,
+        without unloading the pipeline. Called before every inference
+        so a warmup at 256×256 doesn't leave 5 GB of cached attention
+        and VAE buffers sitting around when the next call wants to
+        allocate at 512×512 or higher and immediately OOMs.
+        """
+        gc.collect()
+        if self.device == "cuda":
+            torch.cuda.empty_cache()
+        elif self.device == "mps":
+            try:
+                torch.mps.empty_cache()
+                torch.mps.synchronize()
+            except Exception:
+                pass
 
     def native_dims(self) -> tuple[int | None, int | None]:
         """

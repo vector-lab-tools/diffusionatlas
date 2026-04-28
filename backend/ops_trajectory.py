@@ -197,15 +197,46 @@ def stream(req: TrajectoryRequest, session_state) -> StreamingResponse:
             pipe_local = session_state.pipeline
             device_local = session_state.device
 
+            # Drop cached activations from warmup / previous runs before
+            # this forward pass starts — a warmup at 256² leaves several
+            # GB of attention/VAE buffers cached on MPS that collide
+            # with this run's allocations.
+            session_state.reset_activation_cache()
+
+            # Refuse obviously-impossible resolution / model combos with
+            # a clear error event rather than OOMing mid-stream. SD 1.5
+            # fp32 at 1024² needs ~4 GB just for the QK.T attention
+            # matrix and won't fit under the MPS watermark cap.
+            nw, nh = session_state.native_dims()
+            if nw and nh and (req.width > nw * 1.5 or req.height > nh * 1.5):
+                q.put({
+                    "event": "error",
+                    "code": "resolution_too_large",
+                    "message": (
+                        f"Resolution {req.width}×{req.height} is too large "
+                        f"for {req.modelId} (native {nw}×{nh}). Pick the "
+                        f"model's native size, or switch to an SDXL/FLUX "
+                        f"checkpoint that supports it."
+                    ),
+                })
+                return
+
             # Clamp inference steps to training-timestep count - 1.
             scheduler_max = getattr(pipe_local.scheduler.config, "num_train_timesteps", 1000)
             safe_steps = max(1, min(requested_steps, int(scheduler_max) - 1))
+
+            # Normalise negativePrompt — empty string upsets some
+            # diffusers pipelines (text-encoder produces [0, 40]
+            # instead of [4, 40] and a batched matmul fails).
+            neg = req.negativePrompt
+            if neg is not None and neg.strip() == "":
+                neg = None
 
             generator = torch.Generator(device=device_local).manual_seed(int(req.seed))
             started = time.time()
             out = pipe_local(
                 prompt=req.prompt,
-                negative_prompt=req.negativePrompt,
+                negative_prompt=neg,
                 num_inference_steps=safe_steps,
                 guidance_scale=float(req.cfg),
                 width=int(req.width),

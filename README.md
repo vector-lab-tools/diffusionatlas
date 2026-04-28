@@ -11,7 +11,7 @@
 
 **Author:** David M. Berry
 **Institution:** University of Sussex
-**Version:** 0.3.10
+**Version:** 0.3.11
 **Date:** 28 April 2026
 **Licence:** MIT
 
@@ -240,7 +240,8 @@ The Atlas operations test specific claims of the framework. Denoise Trajectory m
 - [x] **Temp-vs-locked layer model** with per-row padlock toggle, **shuffle/increment seed modes** with per-mode dice animations, **DPMSolverMultistepScheduler (DPM++ 2M Karras)** swap to fix the SD 1.5 PNDM `index 1001` bounds bug, **native-resolution auto-snap** in Width/Height selects via a new `BackendHealthContext`, **per-layer PDF grouping**, sticky StatusBar, and IDB-resilience layer with `withDB()` retry-on-close (v0.3.8)
 - [x] **Stop / abort button** for in-flight trajectory runs (AbortController-wired); partial trajectories are kept as temp layers so a stopped run is still inspectable. **Shuffle / increment seed modes propagated** to Guidance Sweep, Latent Neighbourhood, and Compositional Bench, with a `seedRef` pattern that lets in-flight closures pick up the freshly-rolled seed without waiting for React to re-render (v0.3.9)
 - [x] **Memory hygiene** for 24 GB unified-memory boxes: `PYTORCH_MPS_HIGH_WATERMARK_RATIO=0.7` set before torch import, `torch.mps.empty_cache()` + `synchronize()` on every model swap, opt-in `MIXED_PRECISION_VAE` flag (fp16 U-Net + fp32 VAE) for SD 1.x/2.x, **`POST /warmup`** endpoint at 256×256 to cache MPS kernels without spiking activation memory, **pre-load fit check** with HTTP 413 + `overrideMemoryCheck` escape hatch, **StatusBar memory warning** when the loaded model wouldn't fit (v0.3.10)
-- [ ] Clippy / Hackerman easter eggs with diffusion-flavoured quips
+- [x] **Clippy easter egg** — type `clippy` anywhere outside an input field to summon a diffusion-flavoured paperclip with quips on latents-vs-tokens, the vector turn, and meta-commentary on what you're doing in the app
+- [ ] Hackerman easter egg
 - [ ] Object-detection-based bench scoring (proper GenEval rather than CLIP cosine)
 - [ ] True Gaussian-perturbation neighbourhood mode for the local backend
 - [ ] Together / Stability hosted providers

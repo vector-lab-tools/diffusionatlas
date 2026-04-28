@@ -10,7 +10,7 @@ import {
   type TaskCategoryId,
 } from "@/lib/bench/tasks";
 import { BENCH_PACKS, DEFAULT_PACK_ID, packById } from "@/lib/bench/packs";
-import { Trash2, Plus } from "lucide-react";
+import { Trash2, Plus, Square } from "lucide-react";
 import { saveRun } from "@/lib/cache/runs";
 import type { Run, RunSampleRef } from "@/types/run";
 import { ALL_PROVIDERS, PROVIDER_DEFAULT_MODEL, providerLabel } from "@/lib/providers/defaults";
@@ -20,6 +20,7 @@ import { ExportButtons } from "@/components/shared/ExportButtons";
 import { CameraRoll } from "@/components/shared/CameraRoll";
 import { RandomSeedButton, nextSeed, type SeedMode } from "@/components/shared/RandomSeedButton";
 import { WARMUP_LABEL, WARMUP_TOOLTIP, isWarmupMessage } from "@/lib/local/warmup";
+import { useBackendHealth } from "@/context/BackendHealthContext";
 import { downloadCsv } from "@/lib/export/csv";
 import { downloadPdf } from "@/lib/export/pdf";
 import { downloadJson } from "@/lib/export/json";
@@ -92,6 +93,20 @@ function saveOverrides(overrides: PackOverrides) {
   try { localStorage.setItem(PACK_STORAGE_KEY, JSON.stringify(overrides)); } catch {}
 }
 
+/**
+ * Plain-English read for a CLIP cosine score so the "0.262" number is
+ * interpretable without the user looking up the literature. Bands are
+ * approximate — CLIP cosine has no calibrated scale, but the ranges
+ * here track community convention for ViT-B/32 on natural images.
+ */
+function scoreVerdictLabel(score: number): string {
+  if (score < 0.18) return "weak match — image probably off-prompt";
+  if (score < 0.22) return "marginal — borderline match";
+  if (score < 0.27) return "plausible match";
+  if (score < 0.32) return "strong match";
+  return "very strong match";
+}
+
 function computeScores(rows: BenchRow[]): LaneScores {
   const byCat: Record<TaskCategoryId, { pass: number; fail: number; pending: number }> = {
     "single-object": { pass: 0, fail: 0, pending: 0 },
@@ -113,13 +128,22 @@ function computeScores(rows: BenchRow[]): LaneScores {
 export function CompositionalBench() {
   const { settings, setSettingsOpen } = useSettings();
   const { set: cacheImage } = useImageBlobCache();
+  const { report: healthReport } = useBackendHealth();
 
   const [seed, setSeed] = useState(42);
   const [seedMode, setSeedMode] = useState<SeedMode>("off");
   const [seedSpinning, setSeedSpinning] = useState(false);
   const seedRef = useRef(seed);
   useEffect(() => { seedRef.current = seed; }, [seed]);
-  const [steps, setSteps] = useState(settings.defaults.steps);
+  // Bench needs higher fidelity than the global 4-step default (which
+  // is tuned for FLUX schnell / fast smoke tests). 12 with DPM++ 2M
+  // Karras gives recognisable images on SD 1.5/SDXL — necessary for
+  // CLIP scoring to discriminate compositional success vs. mush.
+  const [steps, setSteps] = useState(Math.max(12, settings.defaults.steps));
+  // CFG held constant at 7.5 (the convention) so per-task CLIP scores
+  // are comparable. Default may be 0 in settings (FLUX-schnell-tuned),
+  // which produces noise on SD 1.5/SDXL — so we floor it here.
+  const [cfg, setCfg] = useState(settings.defaults.cfg > 0 ? settings.defaults.cfg : 7.5);
 
   // Pack selection + editable overrides per pack.
   const [activePackId, setActivePackId] = useState<string>(DEFAULT_PACK_ID);
@@ -156,6 +180,13 @@ export function CompositionalBench() {
   const [compareProviderId, setCompareProviderId] = useState<ProviderId>("local");
   const [compareModelId, setCompareModelId] = useState<string>(PROVIDER_DEFAULT_MODEL.local);
 
+  // Bench abort: a single ref that the lane loop checks between tasks
+  // and that the in-flight fetch's signal is bound to.  stopBench()
+  // sets it and aborts; lanes break out of their per-task loop on the
+  // next iteration.
+  const benchAbortRef = useRef(false);
+  const fetchAbortRef = useRef<AbortController | null>(null);
+
   const primaryConfig: ProviderConfig = {
     providerId: settings.providerId,
     modelId: settings.modelId,
@@ -170,16 +201,30 @@ export function CompositionalBench() {
   };
 
   async function callOnce(prompt: string, cfg_: ProviderConfig): Promise<{ ok: boolean; data?: DiffuseResponse; err?: GenError; status?: number }> {
+    // Local lane: prefer the loaded model's native size from /health.
+    // If health hasn't reported yet, fall back to a safe 512×512 (not
+    // settings.defaults.width which may still be 1024 in localStorage)
+    // — SD 1.5 / SDXL Sweep at 1024² fp32 OOMs on a 24 GB box, and
+    // the backend's pre-flight check refuses with 422 anyway.
+    const isLocal = cfg_.providerId === "local";
+    const w = isLocal
+      ? (healthReport?.nativeWidth ?? 512)
+      : settings.defaults.width;
+    const h = isLocal
+      ? (healthReport?.nativeHeight ?? 512)
+      : settings.defaults.height;
     const request: DiffusionRequest = {
       modelId: cfg_.modelId,
       prompt,
       seed: seedRef.current,
       steps: effectiveSteps(steps, settings),
-      cfg: settings.defaults.cfg,
-      width: settings.defaults.width,
-      height: settings.defaults.height,
+      cfg,
+      width: w,
+      height: h,
       scheduler: settings.defaults.scheduler,
     };
+    const controller = new AbortController();
+    fetchAbortRef.current = controller;
     try {
       const res = await fetch("/api/diffuse", {
         method: "POST",
@@ -188,6 +233,7 @@ export function CompositionalBench() {
           ...(cfg_.apiKey ? { "X-Diffusion-API-Key": cfg_.apiKey } : {}),
         },
         body: JSON.stringify({ providerId: cfg_.providerId, request, localBaseUrl: cfg_.localBaseUrl }),
+        signal: controller.signal,
       });
       if (!res.ok) {
         const err: GenError = await res.json().catch(() => ({ error: "unknown" }));
@@ -196,7 +242,13 @@ export function CompositionalBench() {
       const data: DiffuseResponse = await res.json();
       return { ok: true, data };
     } catch (err) {
+      if (err instanceof DOMException && err.name === "AbortError") {
+        return { ok: false, err: { error: "aborted", message: "Stopped by user" } };
+      }
       return { ok: false, err: { error: "network", message: err instanceof Error ? err.message : String(err) } };
+    } finally {
+      // Clear the ref so subsequent calls don't carry a dead controller.
+      if (fetchAbortRef.current === controller) fetchAbortRef.current = null;
     }
   }
 
@@ -265,6 +317,11 @@ export function CompositionalBench() {
     let modelIdSeen: string | undefined;
     let aborted = false;
     for (let i = 0; i < tasks.length; i++) {
+      // Honour user-initiated stop between tasks.
+      if (benchAbortRef.current) {
+        setter((prev) => prev.map((r, j) => (j >= i ? { ...r, status: "error", errorMessage: "Stopped" } : r)));
+        break;
+      }
       if (aborted) {
         setter((prev) => prev.map((r, j) => (j >= i ? { ...r, status: "error", errorMessage: "Skipped" } : r)));
         break;
@@ -309,7 +366,13 @@ export function CompositionalBench() {
     await saveRun(run);
   }
 
+  function stopBench() {
+    benchAbortRef.current = true;
+    fetchAbortRef.current?.abort();
+  }
+
   async function runBench() {
+    benchAbortRef.current = false;
     // Apply shuffle / increment so a benchmark sweep across seeds is
     // one click away. Updates state + ref so closures and persisted
     // run records see the fresh value.
@@ -471,7 +534,7 @@ export function CompositionalBench() {
         isOverridden={!!packOverrides[activePackId]}
       />
 
-      <div className="grid grid-cols-3 gap-3 mb-4">
+      <div className="grid grid-cols-4 gap-3 mb-4">
         <label className="block" title={lookupTerm("Seed")}>
           <span className="font-sans text-caption uppercase tracking-wider text-muted-foreground cursor-help underline decoration-dotted decoration-muted-foreground/40 underline-offset-4">Seed</span>
           <div className="flex items-stretch gap-1 mt-1">
@@ -498,11 +561,33 @@ export function CompositionalBench() {
             className="input-editorial mt-1"
           />
         </label>
+        <label className="block" title={lookupTerm("CFG")}>
+          <span className="font-sans text-caption uppercase tracking-wider text-muted-foreground cursor-help underline decoration-dotted decoration-muted-foreground/40 underline-offset-4">CFG</span>
+          <input
+            type="number"
+            step="0.5"
+            min={0}
+            max={30}
+            list="cfg-presets-bench"
+            value={cfg}
+            onChange={(e) => setCfg(parseFloat(e.target.value) || 0)}
+            className="input-editorial mt-1"
+          />
+          <datalist id="cfg-presets-bench">
+            <option value="1" label="ignore prompt" />
+            <option value="4" label="soft" />
+            <option value="7.5" label="balanced default" />
+            <option value="12" label="aggressive" />
+          </datalist>
+        </label>
         <div className="block" title={lookupTerm("Pack size")}>
           <span className="font-sans text-caption uppercase tracking-wider text-muted-foreground cursor-help underline decoration-dotted decoration-muted-foreground/40 underline-offset-4">Pack size</span>
           <div className="font-sans text-body-sm mt-2">{activeTasks.length} tasks · {CATEGORIES.length} categories</div>
         </div>
       </div>
+      <p className="font-sans text-caption italic text-muted-foreground -mt-2 mb-4">
+        <span className="not-italic font-medium">CFG (classifier-free guidance)</span> is held at <span className="font-mono not-italic">{cfg}</span> across every task so per-task scoring is comparable. <span className="font-mono not-italic">7.5</span> is the convention; bump it for a stricter prompt-adherence regime, drop it for softer outputs.
+      </p>
 
       {/* Compare-with: cross-backend */}
       <div className="border border-parchment rounded-sm p-3 mb-4 bg-cream/20">
@@ -557,6 +642,15 @@ export function CompositionalBench() {
               ? `Run bench × 2 (${activeTasks.length * 2} images)`
               : `Run bench (${activeTasks.length} images)`}
         </button>
+        {running && (
+          <button
+            onClick={stopBench}
+            className="px-3 py-2 border border-burgundy bg-burgundy text-cream rounded-sm hover:bg-burgundy-900 flex items-center gap-1.5 font-sans text-body-sm"
+            title="Abort the running bench. Tasks already completed are kept; remaining tasks are marked Stopped."
+          >
+            <Square size={12} fill="currentColor" /> Stop
+          </button>
+        )}
         <button
           onClick={() => void autoScore()}
           disabled={running || scoring}
@@ -815,13 +909,28 @@ function BenchLane({ label, rows, scores, clipThreshold, onMark }: BenchLaneProp
               <div className="font-body text-body-sm text-foreground line-clamp-2">{row.task.prompt}</div>
               <div className="font-sans text-caption text-muted-foreground italic line-clamp-2">{row.task.criterion}</div>
               {row.clipScore !== undefined && (
-                <div className="font-sans text-caption text-muted-foreground">
+                <div
+                  className="font-sans text-caption text-muted-foreground cursor-help"
+                  title={
+                    "CLIP cosine similarity between the generated image and the source prompt, " +
+                    "scored by openai/clip-vit-base-patch32. The number is the cosine of the angle " +
+                    "between the two CLIP embeddings (1.0 = identical direction, 0.0 = orthogonal). " +
+                    "For matching pairs, scores typically land in [0.18, 0.35]. The threshold is a " +
+                    "methodological choice, not a fact: 0.20 = permissive, 0.25 = standard, 0.30 = strict. " +
+                    "It does not directly measure object count, attribute binding, or spatial relations — " +
+                    "use it as a coarse 'plausible match' signal and override with manual pass/fail when " +
+                    "compositional fidelity is actually what you're testing."
+                  }
+                >
                   CLIP score:{" "}
                   <span className={row.clipScore >= clipThreshold ? "text-burgundy font-medium" : "text-foreground"}>
                     {row.clipScore.toFixed(3)}
                   </span>
                   <span className="ml-1">
-                    ({row.clipScore >= clipThreshold ? "≥" : "<"} {clipThreshold.toFixed(2)})
+                    ({row.clipScore >= clipThreshold ? "passes" : "below"} threshold {clipThreshold.toFixed(2)})
+                  </span>
+                  <span className="ml-1 italic">
+                    · {scoreVerdictLabel(row.clipScore)}
                   </span>
                 </div>
               )}

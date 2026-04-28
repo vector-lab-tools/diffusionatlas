@@ -10,6 +10,7 @@
 
 import jsPDF from "jspdf";
 import autoTable from "jspdf-autotable";
+import { VERSION } from "@/lib/version";
 
 export interface PdfMeta {
   /** Operation name in the page header. */
@@ -86,12 +87,34 @@ function ensureSpace(doc: jsPDF, y: number, needed: number): number {
 }
 
 function drawHeader(doc: jsPDF, meta: PdfMeta): number {
+  // Branding band — small all-caps "DIFFUSION ATLAS" wordmark in
+  // burgundy at the top-left, version + URL at the top-right, hairline
+  // rule beneath. Mirrors the on-screen Vector Lab editorial style.
+  doc.setFont("helvetica", "bold");
+  doc.setFontSize(8);
+  doc.setTextColor(124, 45, 54);
+  doc.setCharSpace(2);
+  doc.text("DIFFUSION ATLAS", MARGIN, MARGIN);
+  doc.setCharSpace(0);
+  doc.setFont("helvetica", "normal");
+  doc.setFontSize(7);
+  doc.setTextColor(140);
+  doc.text(
+    `v${VERSION} · vector-lab-tools.github.io`,
+    PAGE_W - MARGIN,
+    MARGIN,
+    { align: "right" },
+  );
+  doc.setDrawColor(200);
+  doc.setLineWidth(0.2);
+  doc.line(MARGIN, MARGIN + 2, PAGE_W - MARGIN, MARGIN + 2);
+
   doc.setFont("helvetica", "bold");
   doc.setFontSize(18);
-  doc.setTextColor(124, 45, 54); // burgundy
-  doc.text(meta.title, MARGIN, MARGIN + 6);
+  doc.setTextColor(124, 45, 54);
+  doc.text(meta.title, MARGIN, MARGIN + 12);
 
-  let y = MARGIN + 14;
+  let y = MARGIN + 20;
   if (meta.subtitle) {
     doc.setFont("helvetica", "normal");
     doc.setFontSize(10);
@@ -297,6 +320,40 @@ function drawGlossary(doc: jsPDF, entries: PdfGlossaryEntry[]): void {
   }
 }
 
+/**
+ * Stamp a Diffusion Atlas footer on every page, called once after the
+ * doc is fully built so the page count is final. Burgundy hairline rule
+ * + small wordmark on the left and page X/Y + URL on the right.
+ */
+function stampFooters(doc: jsPDF): void {
+  const total = doc.getNumberOfPages();
+  const stamped = new Date().toISOString().slice(0, 10);
+  for (let i = 1; i <= total; i++) {
+    doc.setPage(i);
+    const y = PAGE_H - 8;
+    doc.setDrawColor(220);
+    doc.setLineWidth(0.2);
+    doc.line(MARGIN, y - 2, PAGE_W - MARGIN, y - 2);
+
+    doc.setFont("helvetica", "bold");
+    doc.setFontSize(7);
+    doc.setTextColor(124, 45, 54);
+    doc.setCharSpace(2);
+    doc.text("DIFFUSION ATLAS", MARGIN, y + 2);
+    doc.setCharSpace(0);
+
+    doc.setFont("helvetica", "normal");
+    doc.setFontSize(7);
+    doc.setTextColor(140);
+    doc.text(
+      `Generated ${stamped} · v${VERSION} · vector-lab-tools.github.io · page ${i}/${total}`,
+      PAGE_W - MARGIN,
+      y + 2,
+      { align: "right" },
+    );
+  }
+}
+
 export function buildPdf(payload: PdfDoc): jsPDF {
   const doc = new jsPDF({ unit: "mm", format: "a4" });
   let y = drawHeader(doc, payload.meta);
@@ -319,6 +376,7 @@ export function buildPdf(payload: PdfDoc): jsPDF {
   if (payload.glossary && payload.glossary.length > 0) {
     drawGlossary(doc, payload.glossary);
   }
+  stampFooters(doc);
   return doc;
 }
 

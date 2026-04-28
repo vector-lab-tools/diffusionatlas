@@ -171,8 +171,7 @@ export function DenoiseTrajectory() {
   // shuffle / +1 seed mode this walks a range of seeds; each
   // intermediate run is auto-locked so all N layers persist for
   // comparison rather than overwriting each other. 1 = current
-  // single-run behaviour. Stop aborts the whole batch, not just the
-  // current iteration, via `batchAbortRef`.
+  // single-run behaviour. Stop aborts the whole batch via batchAbortRef.
   const [batchSize, setBatchSize] = useState(1);
   const [batchProgress, setBatchProgress] = useState<{ done: number; total: number } | null>(null);
   const batchAbortRef = useRef(false);
@@ -256,7 +255,7 @@ export function DenoiseTrajectory() {
     }
   }, [projection, latents]);
 
-  async function run() {
+  async function run(opts: { lockOnComplete?: boolean } = {}) {
     if (!isLocal) {
       setError("Denoise Trajectory requires the Local FastAPI backend (per-step latents are not exposed by hosted providers). Open Settings and switch Backend to Local.");
       return;
@@ -471,34 +470,37 @@ export function DenoiseTrajectory() {
       }
     }
 
-    // Auto-save the just-finished run as a temporary (unlocked) layer.
-    // It will be replaced if the user runs again, unless they lock it
-    // first. Computes its own projection so the layer is renderable
-    // without depending on the live state vars.
+    // Auto-save the just-finished run as a layer. By default temporary
+    // (unlocked, neutral colour) — replaced by the next single run.
+    // When `opts.lockOnComplete` is true (batch run, intermediate
+    // iteration), save as locked with a palette colour so it persists
+    // alongside its siblings.
     if (collected.length >= 2 && finalUrl) {
-      const newLayer: TrajectoryLayer = {
-        id: `layer-${Date.now()}`,
-        label: `${prompt.slice(0, 32)}${prompt.length > 32 ? "…" : ""} · seed ${activeSeed}`,
-        // Temporary layers always use a neutral ink colour so locked
-        // layers retain their bright palette colours.
-        colour: "#1a1a1a",
-        visible: true,
-        locked: false,
-        prompt,
-        seed: activeSeed,
-        steps,
-        cfg,
-        width,
-        height,
-        modelId: settings.modelId,
-        latents: collected.slice(),
-        previews: collectedPreviews.slice(),
-        stepStats: collectedStats.slice(),
-        finalImage: finalUrl,
-        responseTimeMs: respMs,
-        points: pca3D(collected),
-      };
-      setSavedLayers((prev) => [newLayer, ...prev.filter((l) => l.locked)]);
+      const lockNow = opts.lockOnComplete ?? false;
+      setSavedLayers((prev) => {
+        const lockedCount = prev.filter((l) => l.locked).length;
+        const newLayer: TrajectoryLayer = {
+          id: `layer-${Date.now()}`,
+          label: `${prompt.slice(0, 32)}${prompt.length > 32 ? "…" : ""} · seed ${activeSeed}`,
+          colour: lockNow ? nextColour(lockedCount) : "#1a1a1a",
+          visible: true,
+          locked: lockNow,
+          prompt,
+          seed: activeSeed,
+          steps,
+          cfg,
+          width,
+          height,
+          modelId: settings.modelId,
+          latents: collected.slice(),
+          previews: collectedPreviews.slice(),
+          stepStats: collectedStats.slice(),
+          finalImage: finalUrl,
+          responseTimeMs: respMs,
+          points: pca3D(collected),
+        };
+        return [newLayer, ...prev.filter((l) => l.locked)];
+      });
     }
 
     setRunning(false);
@@ -506,7 +508,41 @@ export function DenoiseTrajectory() {
   }
 
   function stopRun() {
+    // Set the batch flag first so a multi-iteration loop breaks
+    // between iterations, then abort the current fetch.
+    batchAbortRef.current = true;
     abortRef.current?.abort();
+  }
+
+  /**
+   * Run N trajectories in sequence. Each iteration except the last is
+   * auto-locked so all N persist as their own layers (otherwise the
+   * temp-replace rule would leave only the last). The seed mode
+   * (shuffle / increment / off) fires once per iteration inside `run()`,
+   * so combining batchSize=10 with mode="increment" walks 10
+   * neighbouring seeds and keeps all 10 trajectories side by side for
+   * comparison.
+   */
+  async function runBatch() {
+    const n = Math.max(1, Math.min(50, batchSize | 0));
+    if (n <= 1) {
+      // Single-run path — auto-save as temp like before.
+      void run();
+      return;
+    }
+    batchAbortRef.current = false;
+    setBatchProgress({ done: 0, total: n });
+    for (let i = 0; i < n; i++) {
+      if (batchAbortRef.current) break;
+      setBatchProgress({ done: i + 1, total: n });
+      // Lock all but the final iteration so every result stays in the
+      // layers list. The last one stays temp so the existing
+      // click-padlock-to-keep affordance still applies.
+      await run({ lockOnComplete: i < n - 1 });
+      if (batchAbortRef.current) break;
+    }
+    setBatchProgress(null);
+    batchAbortRef.current = false;
   }
 
   function updateLayer(id: string, patch: Partial<TrajectoryLayer>) {
@@ -644,10 +680,30 @@ export function DenoiseTrajectory() {
             <input
               type="number"
               step="0.5"
+              min={0}
+              max={30}
+              list="cfg-presets"
               value={cfg}
               onChange={(e) => setCfg(parseFloat(e.target.value) || 0)}
               className="input-editorial mt-1"
             />
+            {/* Canonical CFG values — browser surfaces them as a
+                dropdown, but arbitrary numbers still type-in fine. */}
+            <datalist id="cfg-presets">
+              <option value="1" label="ignore prompt" />
+              <option value="2.5" label="atmospheric" />
+              <option value="4" label="soft" />
+              <option value="5" />
+              <option value="6" />
+              <option value="7" />
+              <option value="7.5" label="balanced default" />
+              <option value="8" />
+              <option value="9" />
+              <option value="10" />
+              <option value="12" label="aggressive" />
+              <option value="15" label="mode collapse risk" />
+              <option value="20" label="oversaturated" />
+            </datalist>
           </label>
           <label className="block" title="Decode a thumbnail every N steps. 1 = capture every step (richer Deep Dive + step scrubber, ~0.5s extra per step). 0 disables previews entirely. Higher values make the run faster at the cost of less data in the inspector.">
             <span className="font-sans text-caption uppercase tracking-wider text-muted-foreground cursor-help underline decoration-dotted decoration-muted-foreground/40 underline-offset-4">Preview every</span>
@@ -689,6 +745,9 @@ export function DenoiseTrajectory() {
             </select>
           </label>
         </div>
+        <p className="font-sans text-caption italic text-muted-foreground mt-2">
+          <span className="not-italic font-medium">CFG (classifier-free guidance):</span> how strongly the model is pushed toward the prompt at each denoising step. <span className="font-mono not-italic">1</span> ignores the prompt; <span className="font-mono not-italic">7.5</span> is the conventional balanced default; <span className="font-mono not-italic">12+</span> oversaturates and mode-collapses. Different CFGs produce different trajectories — the Guidance Sweep operation is built around this lever.
+        </p>
       </div>
 
       {savedLayers.length > 0 && (
@@ -768,21 +827,51 @@ export function DenoiseTrajectory() {
 
       <div className="flex items-center gap-3 mb-4 flex-wrap">
         <button
-          onClick={() => void run()}
+          onClick={() => void runBatch()}
           disabled={running || !isLocal}
           className={running || !isLocal ? "btn-editorial-secondary opacity-50" : "btn-editorial-primary"}
         >
           {running
-            ? statusMsg && progress === null
-              ? statusMsg
-              : `Streaming step ${progress?.done ?? 0}/${progress?.total ?? steps}…`
-            : `Run trajectory (${steps} steps)`}
+            ? batchProgress
+              ? `Batch ${batchProgress.done}/${batchProgress.total} · step ${progress?.done ?? 0}/${progress?.total ?? steps}…`
+              : statusMsg && progress === null
+                ? statusMsg
+                : `Streaming step ${progress?.done ?? 0}/${progress?.total ?? steps}…`
+            : batchSize > 1
+              ? `Run trajectory × ${batchSize}`
+              : `Run trajectory (${steps} steps)`}
         </button>
+        {/* Batch stepper. Pairs naturally with shuffle / +1: × 10 with
+            +1 mode walks ten neighbouring seeds and locks all but the
+            last so they all stay in the layers list. */}
+        <label
+          className="flex items-center gap-1.5 font-sans text-caption text-muted-foreground"
+          title={
+            seedMode === "off" && batchSize > 1
+              ? "Batch run: N trajectories in sequence. Pair with shuffle (random seed each) or +1 (incrementing seed) to walk a range, otherwise all N runs use the same seed."
+              : "Batch run: N trajectories in sequence. Each intermediate run is auto-locked so all N persist as layers; the last stays temporary."
+          }
+        >
+          <span className="uppercase tracking-wider cursor-help underline decoration-dotted decoration-muted-foreground/40 underline-offset-4">
+            ×
+          </span>
+          <input
+            type="number"
+            min={1}
+            max={50}
+            value={batchSize}
+            onChange={(e) => setBatchSize(Math.max(1, Math.min(50, parseInt(e.target.value, 10) || 1)))}
+            disabled={running}
+            className="input-editorial w-16 px-2 py-1 text-body-sm"
+          />
+        </label>
         {running && (
           <button
             onClick={stopRun}
             className="px-3 py-2 border border-burgundy bg-burgundy text-cream rounded-sm hover:bg-burgundy-900 flex items-center gap-1.5 font-sans text-body-sm"
-            title="Abort the in-flight run. The partial trajectory captured so far will be kept as a temporary layer if it has at least 2 steps."
+            title={batchProgress
+              ? `Abort the batch run. Iterations completed so far stay as locked layers; the in-flight one is kept as a partial temp if it has ≥ 2 steps.`
+              : "Abort the in-flight run. The partial trajectory captured so far will be kept as a temporary layer if it has at least 2 steps."}
           >
             <Square size={12} fill="currentColor" /> Stop
           </button>

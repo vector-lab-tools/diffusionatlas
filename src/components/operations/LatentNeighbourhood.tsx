@@ -1,6 +1,7 @@
 "use client";
 
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
+import { Square } from "lucide-react";
 import { useSettings, effectiveSteps } from "@/context/DiffusionSettingsContext";
 import { useImageBlobCache } from "@/context/ImageBlobCacheContext";
 import type { DiffusionRequest, DiffusionResultMeta, ProviderId } from "@/lib/providers/types";
@@ -10,7 +11,7 @@ import { ALL_PROVIDERS, PROVIDER_DEFAULT_MODEL, providerLabel } from "@/lib/prov
 import { DeepDive } from "@/components/shared/DeepDive";
 import { Table } from "@/components/shared/Table";
 import { ExportButtons } from "@/components/shared/ExportButtons";
-import { CameraRoll } from "@/components/shared/CameraRoll";
+import { CameraRoll, FrameModal, type CameraRollEntry } from "@/components/shared/CameraRoll";
 import { downloadCsv } from "@/lib/export/csv";
 import { downloadPdf } from "@/lib/export/pdf";
 import { downloadJson } from "@/lib/export/json";
@@ -18,6 +19,7 @@ import { lookup as lookupTerm, termsFor } from "@/lib/docs/glossary";
 import { PromptChips, STARTER_PRESETS } from "@/components/shared/PromptChips";
 import { RandomSeedButton, nextSeed, type SeedMode } from "@/components/shared/RandomSeedButton";
 import { WARMUP_LABEL, WARMUP_TOOLTIP, isWarmupMessage } from "@/lib/local/warmup";
+import { useBackendHealth } from "@/context/BackendHealthContext";
 
 interface DiffuseResponse {
   images: string[];
@@ -79,6 +81,7 @@ function buildSeedSet(anchor: number, k: number, radius: number): number[] {
 export function LatentNeighbourhood() {
   const { settings } = useSettings();
   const { set: cacheImage } = useImageBlobCache();
+  const { report: healthReport } = useBackendHealth();
 
   const [prompt, setPrompt] = useState("a red cube on a blue cube, photorealistic");
   const [anchor, setAnchor] = useState(42);
@@ -86,10 +89,18 @@ export function LatentNeighbourhood() {
   const [seedSpinning, setSeedSpinning] = useState(false);
   const anchorRef = useRef(anchor);
   useEffect(() => { anchorRef.current = anchor; }, [anchor]);
+  // Neighbourhood abort — same pattern as Sweep / Bench.
+  const neighbourAbortRef = useRef(false);
+  const fetchAbortRef = useRef<AbortController | null>(null);
   const [k, setK] = useState(6);
   const [radius, setRadius] = useState(1000);
-  const [steps, setSteps] = useState(settings.defaults.steps);
-  const [cfg] = useState(settings.defaults.cfg);
+  // 12 default for SD 1.5/SDXL with DPM++ 2M Karras — the global
+  // 4-step default is too low to produce recognisable neighbours.
+  const [steps, setSteps] = useState(Math.max(12, settings.defaults.steps));
+  // CFG held constant across the neighbourhood (the seed is the
+  // variable). Default 7.5 — the global default may be 0 because it's
+  // tuned for FLUX-schnell, but SD 1.5/SDXL at 0 produces noise.
+  const [cfg, setCfg] = useState(settings.defaults.cfg > 0 ? settings.defaults.cfg : 7.5);
   const [rows, setRows] = useState<NeighbourRow[]>([]);
   const [rowsB, setRowsB] = useState<NeighbourRow[]>([]);
   const [running, setRunning] = useState(false);
@@ -115,16 +126,27 @@ export function LatentNeighbourhood() {
   };
 
   async function callOnce(seed: number, cfg_: ProviderConfig): Promise<{ ok: boolean; data?: DiffuseResponse; err?: GenError; status?: number }> {
+    // Local lane uses the loaded model's native size; hosted lanes
+    // keep settings.defaults (often 1024 for flux/SDXL on hosted).
+    const isLocal = cfg_.providerId === "local";
+    const w = isLocal
+      ? (healthReport?.nativeWidth ?? 512)
+      : settings.defaults.width;
+    const h = isLocal
+      ? (healthReport?.nativeHeight ?? 512)
+      : settings.defaults.height;
     const request: DiffusionRequest = {
       modelId: cfg_.modelId,
       prompt,
       seed,
       steps: effectiveSteps(steps, settings),
       cfg,
-      width: settings.defaults.width,
-      height: settings.defaults.height,
+      width: w,
+      height: h,
       scheduler: settings.defaults.scheduler,
     };
+    const controller = new AbortController();
+    fetchAbortRef.current = controller;
     try {
       const res = await fetch("/api/diffuse", {
         method: "POST",
@@ -133,6 +155,7 @@ export function LatentNeighbourhood() {
           ...(cfg_.apiKey ? { "X-Diffusion-API-Key": cfg_.apiKey } : {}),
         },
         body: JSON.stringify({ providerId: cfg_.providerId, request, localBaseUrl: cfg_.localBaseUrl }),
+        signal: controller.signal,
       });
       if (!res.ok) {
         const err: GenError = await res.json().catch(() => ({ error: "unknown" }));
@@ -141,7 +164,12 @@ export function LatentNeighbourhood() {
       const data: DiffuseResponse = await res.json();
       return { ok: true, data };
     } catch (err) {
+      if (err instanceof DOMException && err.name === "AbortError") {
+        return { ok: false, err: { error: "aborted", message: "Stopped by user" } };
+      }
       return { ok: false, err: { error: "network", message: err instanceof Error ? err.message : String(err) } };
+    } finally {
+      if (fetchAbortRef.current === controller) fetchAbortRef.current = null;
     }
   }
 
@@ -210,6 +238,10 @@ export function LatentNeighbourhood() {
     let modelIdSeen: string | undefined;
     let aborted = false;
     for (let i = 0; i < seeds.length; i++) {
+      if (neighbourAbortRef.current) {
+        setter((prev) => prev.map((r, j) => (j >= i ? { ...r, status: "error", errorMessage: "Stopped" } : r)));
+        break;
+      }
       if (aborted) {
         setter((prev) => prev.map((r, j) => (j >= i ? { ...r, status: "error", errorMessage: "Skipped" } : r)));
         break;
@@ -261,7 +293,13 @@ export function LatentNeighbourhood() {
     await saveRun(run);
   }
 
+  function stopNeighbourhood() {
+    neighbourAbortRef.current = true;
+    fetchAbortRef.current?.abort();
+  }
+
   async function runNeighbourhood() {
+    neighbourAbortRef.current = false;
     if (k < 1) {
       setTopError("k must be ≥ 1.");
       return;
@@ -324,7 +362,7 @@ export function LatentNeighbourhood() {
           />
         </label>
         <PromptChips active={prompt} presets={STARTER_PRESETS} onPick={setPrompt} />
-        <div className="grid grid-cols-4 gap-3">
+        <div className="grid grid-cols-5 gap-3">
           <label className="block" title={lookupTerm("Anchor seed")}>
             <span className="font-sans text-caption uppercase tracking-wider text-muted-foreground cursor-help underline decoration-dotted decoration-muted-foreground/40 underline-offset-4">Anchor seed</span>
             <div className="flex items-stretch gap-1 mt-1">
@@ -373,7 +411,31 @@ export function LatentNeighbourhood() {
               className="input-editorial mt-1"
             />
           </label>
+          <label className="block" title={lookupTerm("CFG")}>
+            <span className="font-sans text-caption uppercase tracking-wider text-muted-foreground cursor-help underline decoration-dotted decoration-muted-foreground/40 underline-offset-4">CFG</span>
+            <input
+              type="number"
+              step="0.5"
+              min={0}
+              max={30}
+              list="cfg-presets-nbr"
+              value={cfg}
+              onChange={(e) => setCfg(parseFloat(e.target.value) || 0)}
+              className="input-editorial mt-1"
+            />
+            <datalist id="cfg-presets-nbr">
+              <option value="1" label="ignore prompt" />
+              <option value="2.5" label="atmospheric" />
+              <option value="4" label="soft" />
+              <option value="7.5" label="balanced default" />
+              <option value="12" label="aggressive" />
+              <option value="15" label="mode collapse risk" />
+            </datalist>
+          </label>
         </div>
+        <p className="font-sans text-caption italic text-muted-foreground mt-2">
+          <span className="not-italic font-medium">CFG (classifier-free guidance)</span> is held constant at <span className="font-mono not-italic">{cfg}</span> across the neighbourhood — you're varying the seed, not the guidance, so the variable is reproduced cleanly. To see how CFG itself bends the manifold for this prompt + seed, use the Guidance Sweep operation instead.
+        </p>
       </div>
 
       {/* Compare-with: cross-backend agreement */}
@@ -429,6 +491,15 @@ export function LatentNeighbourhood() {
               ? `Sample × 2 (${k * 2} images)`
               : `Sample neighbourhood (${k} ${k === 1 ? "image" : "images"})`}
         </button>
+        {running && (
+          <button
+            onClick={stopNeighbourhood}
+            className="px-3 py-2 border border-burgundy bg-burgundy text-cream rounded-sm hover:bg-burgundy-900 flex items-center gap-1.5 font-sans text-body-sm"
+            title="Abort sampling. Cells already completed are kept; remaining ones are marked Stopped."
+          >
+            <Square size={12} fill="currentColor" /> Stop
+          </button>
+        )}
         <span className="font-sans text-caption text-muted-foreground">
           {providerLabel(settings.providerId)} · {settings.modelId}
           {compareEnabled && <> ↔ {providerLabel(compareProviderId)} · {compareModelId}</>}
@@ -458,12 +529,20 @@ export function LatentNeighbourhood() {
         <NeighbourLane
           label={`${providerLabel(settings.providerId)} · ${settings.modelId}`}
           rows={rows}
+          prompt={prompt}
+          anchor={anchor}
+          modelId={settings.modelId}
+          providerId={settings.providerId}
         />
       )}
       {compareEnabled && rowsB.length > 0 && (
         <NeighbourLane
           label={`${providerLabel(compareProviderId)} · ${compareModelId}`}
           rows={rowsB}
+          prompt={prompt}
+          anchor={anchor}
+          modelId={compareModelId}
+          providerId={compareProviderId}
         />
       )}
 
@@ -607,9 +686,37 @@ function NeighbourDeepDive({ prompt, anchor, k, radius, steps, primaryLabel, row
 interface NeighbourLaneProps {
   label: string;
   rows: NeighbourRow[];
+  prompt: string;
+  anchor: number;
+  modelId: string;
+  providerId: ProviderId;
 }
 
-function NeighbourLane({ label, rows }: NeighbourLaneProps) {
+function NeighbourLane({ label, rows, prompt, anchor, modelId, providerId }: NeighbourLaneProps) {
+  const okRows = useMemo(() => rows.filter((r) => r.imageDataUrl), [rows]);
+  const [openIdx, setOpenIdx] = useState<number | null>(null);
+
+  function entryFor(row: NeighbourRow): CameraRollEntry {
+    const isAnchor = row.seed === anchor;
+    const details: Array<{ label: string; value: string | number }> = [
+      { label: "Prompt", value: prompt },
+      { label: "Seed", value: row.seed },
+      { label: "Role", value: isAnchor ? "anchor" : "neighbour" },
+      { label: "Provider", value: providerId },
+      { label: "Model", value: modelId },
+    ];
+    if (row.meta?.responseTimeMs != null) {
+      details.push({ label: "Time", value: `${(row.meta.responseTimeMs / 1000).toFixed(1)}s` });
+    }
+    return {
+      src: row.imageDataUrl as string,
+      caption: `seed ${row.seed}${isAnchor ? " · anchor" : ""}`,
+      subcaption: `${providerLabel(providerId)} · ${modelId.split("/").pop() ?? modelId}`,
+      details,
+    };
+  }
+  const openEntry = openIdx != null ? entryFor(okRows[openIdx]) : null;
+
   return (
     <div className="border-t border-parchment pt-4 mt-4">
       <h3 className="font-sans text-caption uppercase tracking-wider text-muted-foreground mb-2">
@@ -620,8 +727,18 @@ function NeighbourLane({ label, rows }: NeighbourLaneProps) {
           <div key={i} className="flex flex-col">
             <div className="aspect-square bg-cream/50 border border-parchment rounded-sm overflow-hidden flex items-center justify-center">
               {row.status === "ok" && row.imageDataUrl && (
-                // eslint-disable-next-line @next/next/no-img-element
-                <img src={row.imageDataUrl} alt={`seed ${row.seed}`} className="w-full h-full object-cover" />
+                <button
+                  type="button"
+                  onClick={() => {
+                    const j = okRows.findIndex((r) => r === row);
+                    if (j >= 0) setOpenIdx(j);
+                  }}
+                  className="w-full h-full block hover:opacity-90 hover:ring-2 hover:ring-burgundy/30 transition-all"
+                  title="Click for full image + RGB histogram + stats"
+                >
+                  {/* eslint-disable-next-line @next/next/no-img-element */}
+                  <img src={row.imageDataUrl} alt={`seed ${row.seed}`} className="w-full h-full object-cover" />
+                </button>
               )}
               {row.status === "running" && (
                 <span
@@ -648,6 +765,16 @@ function NeighbourLane({ label, rows }: NeighbourLaneProps) {
           </div>
         ))}
       </div>
+      {openIdx != null && openEntry && (
+        <FrameModal
+          entry={openEntry}
+          index={openIdx}
+          total={okRows.length}
+          onClose={() => setOpenIdx(null)}
+          onPrev={openIdx > 0 ? () => setOpenIdx(openIdx - 1) : undefined}
+          onNext={openIdx < okRows.length - 1 ? () => setOpenIdx(openIdx + 1) : undefined}
+        />
+      )}
     </div>
   );
 }

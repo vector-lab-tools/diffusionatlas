@@ -15,11 +15,17 @@ import torch
 
 
 # Enable mixed-precision VAE for SD 1.x / 2.x on MPS: U-Net and text
-# encoder run at fp16 (or bf16), VAE runs at fp32. This dodges the
-# fp16-VAE NaN bug that originally pushed us to full fp32 while halving
-# the resident weight footprint (~5-7 GB → ~3 GB peak). Off by default
-# until verified on reference seeds; enable per-session via
-# `MIXED_PRECISION_VAE=1 uvicorn main:app …` and watch for black images.
+# encoder at fp16, VAE explicitly cast back to fp32. In theory this
+# halves resident weight memory (~5-7 GB → ~3 GB peak) without
+# triggering the historic fp16-VAE NaN bug.
+#
+# In practice the fp16 U-Net path on MPS is fragile: certain modules
+# (LayerNorm biases, scheduler-injected ops) stay at fp32 after the
+# load-time `torch_dtype=fp16` cast and produce
+# `Input type (c10::Half) and bias type (float) should be the same`
+# at forward time. So this is **off by default** until those casts are
+# audited. Opt in with `MIXED_PRECISION_VAE=1 uvicorn …` once you've
+# confirmed forward passes don't trip the dtype check.
 MIXED_PRECISION_VAE = os.environ.get("MIXED_PRECISION_VAE", "0") == "1"
 
 DeviceName = Literal["cuda", "mps", "cpu"]
@@ -123,13 +129,15 @@ def dtype_for_model(model_id: str, device: DeviceName) -> torch.dtype:
 # at 512×512 / 1024×1024 with attention slicing on. Numbers are
 # deliberately conservative: better to refuse a load than crash the OS.
 MODEL_FOOTPRINTS_GB: dict[str, float] = {
-    "sd1.5": 4.0,    # fp32: ~4 GB resident
-    "sd2": 5.0,      # fp32: ~5 GB
-    "sdxl": 7.0,     # bf16: ~7 GB
-    "sd3": 10.0,     # bf16: ~10 GB
+    # SD 1.x / 2.x at fp32 (default on MPS — see dtype_for_model).
+    # If MIXED_PRECISION_VAE is on, real usage is roughly half these.
+    "sd1.5": 5.0,
+    "sd2": 6.0,
+    "sdxl": 7.0,     # bf16
+    "sd3": 10.0,     # bf16
     "flux-schnell": 12.0,
     "flux-dev": 24.0,
-    "default": 8.0,  # unknown model: assume mid-range
+    "default": 8.0,
 }
 
 

@@ -1,6 +1,7 @@
 "use client";
 
 import { useEffect, useMemo, useRef, useState } from "react";
+import { Square } from "lucide-react";
 import { useSettings, effectiveSteps } from "@/context/DiffusionSettingsContext";
 import { useImageBlobCache } from "@/context/ImageBlobCacheContext";
 import type { DiffusionRequest, DiffusionResultMeta, ProviderId } from "@/lib/providers/types";
@@ -11,7 +12,7 @@ import { ALL_PROVIDERS, PROVIDER_DEFAULT_MODEL, providerLabel } from "@/lib/prov
 import { DeepDive } from "@/components/shared/DeepDive";
 import { Table } from "@/components/shared/Table";
 import { ExportButtons } from "@/components/shared/ExportButtons";
-import { CameraRoll } from "@/components/shared/CameraRoll";
+import { CameraRoll, FrameModal, type CameraRollEntry } from "@/components/shared/CameraRoll";
 import { downloadCsv } from "@/lib/export/csv";
 import { downloadPdf } from "@/lib/export/pdf";
 import { downloadJson } from "@/lib/export/json";
@@ -19,6 +20,7 @@ import { lookup as lookupTerm, termsFor } from "@/lib/docs/glossary";
 import { PromptChips, STARTER_PRESETS } from "@/components/shared/PromptChips";
 import { RandomSeedButton, nextSeed, type SeedMode } from "@/components/shared/RandomSeedButton";
 import { WARMUP_LABEL, WARMUP_TOOLTIP, isWarmupMessage } from "@/lib/local/warmup";
+import { useBackendHealth } from "@/context/BackendHealthContext";
 
 interface DiffuseResponse {
   images: string[];
@@ -124,16 +126,27 @@ interface ProviderConfig {
 export function GuidanceSweep() {
   const { settings } = useSettings();
   const { set: cacheImage } = useImageBlobCache();
+  const { report: healthReport } = useBackendHealth();
 
   const [prompt, setPrompt] = useState("a red cube on a blue cube, photorealistic");
   const [seed, setSeed] = useState(42);
   const [seedMode, setSeedMode] = useState<SeedMode>("off");
   const [seedSpinning, setSeedSpinning] = useState(false);
+
+  // Sweep abort: ref the per-CFG loop checks between cells, plus a
+  // single AbortController bound to the current /api/diffuse fetch so
+  // Stop terminates the in-flight call as well.
+  const sweepAbortRef = useRef(false);
+  const fetchAbortRef = useRef<AbortController | null>(null);
   // Ref so callOnce / runOne can read the freshly-rolled seed without
   // waiting for React to re-render their closures.
   const seedRef = useRef(seed);
   useEffect(() => { seedRef.current = seed; }, [seed]);
-  const [steps, setSteps] = useState(settings.defaults.steps);
+  // Bump to 12 by default — the global 4-step default is tuned for
+  // FLUX-schnell smoke tests; SD 1.5 / SDXL with DPM++ 2M Karras
+  // produces mushy CFG-sweep grids at 4. 12 is the modern fast-and-good
+  // sweet spot.
+  const [steps, setSteps] = useState(Math.max(12, settings.defaults.steps));
   const [cfgList, setCfgList] = useState(DEFAULT_CFG_SET);
   const [rows, setRows] = useState<SweepRow[]>([]);
   const [rowsB, setRowsB] = useState<SweepRow[]>([]);
@@ -201,16 +214,29 @@ export function GuidanceSweep() {
   const driftB = useMemo(() => (compareEnabled ? laneDrift(rowsB) : null), [rowsB, compareEnabled]);
 
   async function callOnce(cfg: number, cfg_: ProviderConfig): Promise<{ ok: boolean; data?: DiffuseResponse; err?: GenError; status?: number }> {
+    // For the local lane, override the global settings.defaults
+    // resolution with the loaded model's native size (from /health).
+    // settings.defaults is preserved for hosted lanes since flux /
+    // SDXL on hosted providers often expect 1024 anyway.
+    const isLocal = cfg_.providerId === "local";
+    const w = isLocal
+      ? (healthReport?.nativeWidth ?? 512)
+      : settings.defaults.width;
+    const h = isLocal
+      ? (healthReport?.nativeHeight ?? 512)
+      : settings.defaults.height;
     const request: DiffusionRequest = {
       modelId: cfg_.modelId,
       prompt,
       seed: seedRef.current,
       steps: effectiveSteps(steps, settings),
       cfg,
-      width: settings.defaults.width,
-      height: settings.defaults.height,
+      width: w,
+      height: h,
       scheduler: settings.defaults.scheduler,
     };
+    const controller = new AbortController();
+    fetchAbortRef.current = controller;
     try {
       const res = await fetch("/api/diffuse", {
         method: "POST",
@@ -219,6 +245,7 @@ export function GuidanceSweep() {
           ...(cfg_.apiKey ? { "X-Diffusion-API-Key": cfg_.apiKey } : {}),
         },
         body: JSON.stringify({ providerId: cfg_.providerId, request, localBaseUrl: cfg_.localBaseUrl }),
+        signal: controller.signal,
       });
       if (!res.ok) {
         const err: GenError = await res.json().catch(() => ({ error: "unknown" }));
@@ -227,7 +254,12 @@ export function GuidanceSweep() {
       const data: DiffuseResponse = await res.json();
       return { ok: true, data };
     } catch (err) {
+      if (err instanceof DOMException && err.name === "AbortError") {
+        return { ok: false, err: { error: "aborted", message: "Stopped by user" } };
+      }
       return { ok: false, err: { error: "network", message: err instanceof Error ? err.message : String(err) } };
+    } finally {
+      if (fetchAbortRef.current === controller) fetchAbortRef.current = null;
     }
   }
 
@@ -296,6 +328,12 @@ export function GuidanceSweep() {
     let modelIdSeen: string | undefined;
     let aborted = false;
     for (let i = 0; i < cfgs.length; i++) {
+      // User-initiated stop terminates the per-CFG loop on the next
+      // iteration; the in-flight fetch is already aborted in stopSweep.
+      if (sweepAbortRef.current) {
+        setter((prev) => prev.map((r, j) => (j >= i ? { ...r, status: "error", errorMessage: "Stopped" } : r)));
+        break;
+      }
       if (aborted) {
         setter((prev) => prev.map((r, j) => (j >= i ? { ...r, status: "error", errorMessage: "Skipped" } : r)));
         break;
@@ -347,11 +385,17 @@ export function GuidanceSweep() {
     await saveRun(run);
   }
 
+  function stopSweep() {
+    sweepAbortRef.current = true;
+    fetchAbortRef.current?.abort();
+  }
+
   async function runSweep() {
     if (cfgs.length === 0) {
       setTopError("Enter at least one CFG value.");
       return;
     }
+    sweepAbortRef.current = false;
     // Apply shuffle / increment before the sweep starts, so a held seed
     // walks predictably across runs. Update both state (for the input)
     // and ref (so the in-flight closures read the fresh value).
@@ -450,6 +494,9 @@ export function GuidanceSweep() {
             />
           </label>
         </div>
+        <p className="font-sans text-caption italic text-muted-foreground mt-2">
+          <span className="not-italic font-medium">CFG (classifier-free guidance)</span> controls how strongly the model is pushed toward the prompt. The sweep generates the same prompt + seed at each value in the list so you can see where the controllability surface bends. <span className="font-mono not-italic">1</span> ignores the prompt entirely; <span className="font-mono not-italic">7.5</span> is the balanced default; <span className="font-mono not-italic">12+</span> oversaturates and mode-collapses. The drift curve below the grid measures perceptual distance from the CFG-7.5 baseline.
+        </p>
       </div>
 
       {/* Compare-with: cross-backend agreement */}
@@ -505,6 +552,15 @@ export function GuidanceSweep() {
               ? `Run sweep × 2 (${cfgs.length * 2} images)`
               : `Run sweep (${cfgs.length} ${cfgs.length === 1 ? "image" : "images"})`}
         </button>
+        {running && (
+          <button
+            onClick={stopSweep}
+            className="px-3 py-2 border border-burgundy bg-burgundy text-cream rounded-sm hover:bg-burgundy-900 flex items-center gap-1.5 font-sans text-body-sm"
+            title="Abort the running sweep. Cells already completed are kept; remaining cells are marked Stopped."
+          >
+            <Square size={12} fill="currentColor" /> Stop
+          </button>
+        )}
         <span className="font-sans text-caption text-muted-foreground">
           {providerLabel(settings.providerId)} · {settings.modelId}
           {compareEnabled && <> ↔ {providerLabel(compareProviderId)} · {compareModelId}</>}
@@ -536,6 +592,10 @@ export function GuidanceSweep() {
           label={`${providerLabel(settings.providerId)} · ${settings.modelId}`}
           rows={rows}
           drift={drift}
+          prompt={prompt}
+          seed={seed}
+          modelId={settings.modelId}
+          providerId={settings.providerId}
         />
       )}
       {compareEnabled && rowsB.length > 0 && (
@@ -543,6 +603,10 @@ export function GuidanceSweep() {
           label={`${providerLabel(compareProviderId)} · ${compareModelId}`}
           rows={rowsB}
           drift={driftB}
+          prompt={prompt}
+          seed={seed}
+          modelId={compareModelId}
+          providerId={compareProviderId}
         />
       )}
 
@@ -700,9 +764,40 @@ interface SweepLaneProps {
   label: string;
   rows: SweepRow[];
   drift: Array<number | null> | null;
+  prompt: string;
+  seed: number;
+  modelId: string;
+  providerId: ProviderId;
 }
 
-function SweepLane({ label, rows, drift }: SweepLaneProps) {
+function SweepLane({ label, rows, drift, prompt, seed, modelId, providerId }: SweepLaneProps) {
+  // Click-to-inspect: opening a frame surfaces the same RGB-overlay
+  // histogram + image-stats panel used in DenoiseTrajectory's camera
+  // roll. Keeps the modal logic inside the lane so each lane has its
+  // own open state and prev/next walks within that lane.
+  const okRows = useMemo(() => rows.filter((r) => r.imageDataUrl), [rows]);
+  const [openIdx, setOpenIdx] = useState<number | null>(null);
+  const openEntry = openIdx != null ? entryFor(okRows[openIdx]) : null;
+
+  function entryFor(row: SweepRow): CameraRollEntry {
+    const details: Array<{ label: string; value: string | number }> = [
+      { label: "Prompt", value: prompt },
+      { label: "CFG", value: row.cfg },
+      { label: "Seed", value: seed },
+      { label: "Provider", value: providerId },
+      { label: "Model", value: modelId },
+    ];
+    if (row.meta?.responseTimeMs != null) {
+      details.push({ label: "Time", value: `${(row.meta.responseTimeMs / 1000).toFixed(1)}s` });
+    }
+    return {
+      src: row.imageDataUrl as string,
+      caption: `CFG ${row.cfg}`,
+      subcaption: `${providerLabel(providerId)} · seed ${seed}`,
+      details,
+    };
+  }
+
   return (
     <div className="border-t border-parchment pt-4 mt-4">
       <h3 className="font-sans text-caption uppercase tracking-wider text-muted-foreground mb-2">
@@ -721,8 +816,18 @@ function SweepLane({ label, rows, drift }: SweepLaneProps) {
           <div key={i} className="flex flex-col">
             <div className="aspect-square bg-cream/50 border border-parchment rounded-sm overflow-hidden flex items-center justify-center">
               {row.status === "ok" && row.imageDataUrl && (
-                // eslint-disable-next-line @next/next/no-img-element
-                <img src={row.imageDataUrl} alt={`CFG ${row.cfg}`} className="w-full h-full object-cover" />
+                <button
+                  type="button"
+                  onClick={() => {
+                    const j = okRows.findIndex((r) => r === row);
+                    if (j >= 0) setOpenIdx(j);
+                  }}
+                  className="w-full h-full block hover:opacity-90 hover:ring-2 hover:ring-burgundy/30 transition-all"
+                  title="Click for full image + RGB histogram + stats"
+                >
+                  {/* eslint-disable-next-line @next/next/no-img-element */}
+                  <img src={row.imageDataUrl} alt={`CFG ${row.cfg}`} className="w-full h-full object-cover" />
+                </button>
               )}
               {row.status === "running" && (
                 <span
@@ -748,6 +853,16 @@ function SweepLane({ label, rows, drift }: SweepLaneProps) {
           </div>
         ))}
       </div>
+      {openIdx != null && openEntry && (
+        <FrameModal
+          entry={openEntry}
+          index={openIdx}
+          total={okRows.length}
+          onClose={() => setOpenIdx(null)}
+          onPrev={openIdx > 0 ? () => setOpenIdx(openIdx - 1) : undefined}
+          onNext={openIdx < okRows.length - 1 ? () => setOpenIdx(openIdx + 1) : undefined}
+        />
+      )}
     </div>
   );
 }

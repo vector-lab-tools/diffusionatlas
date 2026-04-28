@@ -34,7 +34,13 @@ const DEFAULT_SETTINGS: DiffusionSettings = {
   backend: "hosted",
   providerId: "replicate",
   modelId: "black-forest-labs/flux-schnell",
-  defaults: { steps: 4, cfg: 0, width: 1024, height: 1024, scheduler: "DPMSolverMultistep" },
+  // 512×512 is the safe default — SD 1.5 (the local default) is trained at
+  // 512 and fp32 attention at 1024 needs ~4 GB per forward, blowing the
+  // MPS watermark cap on a 24 GB box. SDXL/FLUX users can bump to 1024 in
+  // Settings; DenoiseTrajectory already auto-snaps to the loaded model's
+  // native size via /health, so this default mainly affects the hosted
+  // lanes of Sweep / Neighbourhood / Bench.
+  defaults: { steps: 4, cfg: 0, width: 512, height: 512, scheduler: "DPMSolverMultistep" },
   localBaseUrl: "http://localhost:8000",
   apiKeys: {},
   darkMode: false,
