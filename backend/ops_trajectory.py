@@ -44,6 +44,10 @@ class TrajectoryRequest(BaseModel):
     previewSize: int = Field(96, ge=32, le=256)
     """Thumbnail edge length in pixels."""
 
+    overrideMemoryCheck: bool = False
+    """Bypass the pre-load fit check. Only set if the user has been
+    warned and explicitly accepted the risk."""
+
 
 _DONE = object()
 
@@ -166,7 +170,27 @@ def stream(req: TrajectoryRequest, session_state) -> StreamingResponse:
                     else f"Loading {req.modelId} (first request can take 1–2 minutes)"
                 ),
             })
-            session_state.load(req.modelId)
+            try:
+                session_state.load(req.modelId, force=req.overrideMemoryCheck)
+            except Exception as e:
+                # Streaming endpoint: surface the load failure as an
+                # `error` event rather than throwing. Includes the
+                # 413-style memory-too-large detail when applicable so
+                # the frontend can show the override prompt.
+                from session import ModelTooLargeError
+                if isinstance(e, ModelTooLargeError):
+                    q.put({
+                        "event": "error",
+                        "code": "model_too_large",
+                        "message": str(e),
+                        "modelId": e.model_id,
+                        "footprintGb": e.footprint_gb,
+                        "availableGb": e.available_gb,
+                        "headroomGb": e.headroom_gb,
+                    })
+                else:
+                    q.put({"event": "error", "message": f"Load failed: {e}"})
+                return
             pipe_holder["pipe"] = session_state.pipeline
             q.put({"event": "ready", "device": session_state.device})
 

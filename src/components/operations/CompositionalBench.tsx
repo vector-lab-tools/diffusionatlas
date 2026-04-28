@@ -19,6 +19,7 @@ import { Table } from "@/components/shared/Table";
 import { ExportButtons } from "@/components/shared/ExportButtons";
 import { CameraRoll } from "@/components/shared/CameraRoll";
 import { RandomSeedButton, nextSeed, type SeedMode } from "@/components/shared/RandomSeedButton";
+import { WARMUP_LABEL, WARMUP_TOOLTIP, isWarmupMessage } from "@/lib/local/warmup";
 import { downloadCsv } from "@/lib/export/csv";
 import { downloadPdf } from "@/lib/export/pdf";
 import { downloadJson } from "@/lib/export/json";
@@ -268,7 +269,13 @@ export function CompositionalBench() {
         setter((prev) => prev.map((r, j) => (j >= i ? { ...r, status: "error", errorMessage: "Skipped" } : r)));
         break;
       }
-      setRowAt(i, { status: "running" });
+      // First local task on a cold backend warms the MPS pipeline
+      // (~1-2 min); subsequent tasks reuse the warmed scheduler.
+      const isLocalLane = cfg_.providerId === "local";
+      setRowAt(i, {
+        status: "running",
+        errorMessage: isLocalLane && i === 0 ? WARMUP_LABEL : undefined,
+      });
       const ref: { key?: string; meta?: DiffusionResultMeta } = {};
       const { abortAll } = await runOne(i, tasks[i], cfg_, setRowAt, keyPrefix, ref);
       if (ref.key && ref.meta) {
@@ -785,7 +792,10 @@ function BenchLane({ label, rows, scores, clipThreshold, onMark }: BenchLaneProp
                 <img src={row.imageDataUrl} alt={row.task.prompt} className="w-full h-full object-cover" />
               )}
               {row.status === "running" && (
-                <span className="font-sans text-caption text-muted-foreground text-center px-2">
+                <span
+                  className={`font-sans text-caption text-muted-foreground text-center px-2 ${isWarmupMessage(row.errorMessage) ? "cursor-help underline decoration-dotted decoration-muted-foreground/40 underline-offset-4" : ""}`}
+                  title={isWarmupMessage(row.errorMessage) ? WARMUP_TOOLTIP : undefined}
+                >
                   {row.errorMessage ?? "Generating…"}
                 </span>
               )}

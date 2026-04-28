@@ -17,6 +17,7 @@ import { downloadJson } from "@/lib/export/json";
 import { lookup as lookupTerm, termsFor } from "@/lib/docs/glossary";
 import { PromptChips, STARTER_PRESETS } from "@/components/shared/PromptChips";
 import { RandomSeedButton, nextSeed, type SeedMode } from "@/components/shared/RandomSeedButton";
+import { WARMUP_LABEL, WARMUP_TOOLTIP, isWarmupMessage } from "@/lib/local/warmup";
 
 interface DiffuseResponse {
   images: string[];
@@ -213,7 +214,14 @@ export function LatentNeighbourhood() {
         setter((prev) => prev.map((r, j) => (j >= i ? { ...r, status: "error", errorMessage: "Skipped" } : r)));
         break;
       }
-      setRowAt(i, { status: "running" });
+      // First local cell on a cold backend warms the MPS pipeline
+      // (~1-2 min); /generate has no streaming so we surface this in
+      // the cell rather than leaving the user staring at "running".
+      const isLocalLane = cfg_.providerId === "local";
+      setRowAt(i, {
+        status: "running",
+        errorMessage: isLocalLane && i === 0 ? WARMUP_LABEL : undefined,
+      });
       const ref: { key?: string; meta?: DiffusionResultMeta } = {};
       const { abortAll } = await runOne(seeds[i], i, cfg_, setRowAt, keyPrefix, ref);
       if (ref.key && ref.meta) {
@@ -616,7 +624,10 @@ function NeighbourLane({ label, rows }: NeighbourLaneProps) {
                 <img src={row.imageDataUrl} alt={`seed ${row.seed}`} className="w-full h-full object-cover" />
               )}
               {row.status === "running" && (
-                <span className="font-sans text-caption text-muted-foreground text-center px-2">
+                <span
+                  className={`font-sans text-caption text-muted-foreground text-center px-2 ${isWarmupMessage(row.errorMessage) ? "cursor-help underline decoration-dotted decoration-muted-foreground/40 underline-offset-4" : ""}`}
+                  title={isWarmupMessage(row.errorMessage) ? WARMUP_TOOLTIP : undefined}
+                >
                   {row.errorMessage ?? "Generating…"}
                 </span>
               )}

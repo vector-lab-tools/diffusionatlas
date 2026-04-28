@@ -14,23 +14,44 @@ import { useBackendHealth } from "@/context/BackendHealthContext";
  */
 export function BackendHealth() {
   const { settings } = useSettings();
-  const { status, report, lastCheck } = useBackendHealth();
+  const { status, report, lastCheck, warmup, memoryWarning } = useBackendHealth();
   const [open, setOpen] = useState(false);
 
   const dotColour =
     status === "ok"
-      ? "bg-green-500"
+      ? warmup === "too-large"
+        ? "bg-red-500"
+        : warmup === "warming"
+          ? "bg-amber-400"
+          : "bg-green-500"
       : status === "error"
         ? "bg-red-500"
         : "bg-amber-400";
   const dotTitle =
     status === "ok"
-      ? `Local backend reachable at ${settings.localBaseUrl}${
-          report?.currentModelId ? ` · ${report.currentModelId} loaded` : ""
-        } (click for details)`
+      ? warmup === "too-large" && memoryWarning
+        ? `${memoryWarning.message} (click for details)`
+        : warmup === "warming"
+          ? `Warming up the MPS pipeline (~1–2 min) · ${settings.modelId}`
+          : warmup === "warm"
+            ? `Local backend reachable · ${settings.modelId} warm and ready`
+            : warmup === "failed"
+              ? `Local backend reachable but warmup failed · first /generate will pay the warmup cost`
+              : `Local backend reachable at ${settings.localBaseUrl}${
+                  report?.currentModelId ? ` · ${report.currentModelId} loaded` : ""
+                } (click for details)`
       : status === "error"
         ? `Cannot reach local backend at ${settings.localBaseUrl} (click for details)`
         : "Checking local backend…";
+
+  const label =
+    warmup === "too-large"
+      ? "too large"
+      : warmup === "warming"
+        ? "warming"
+        : warmup === "warm"
+          ? "warm"
+          : "backend";
 
   return (
     <>
@@ -40,9 +61,9 @@ export function BackendHealth() {
         title={dotTitle}
       >
         <span
-          className={`inline-block w-2 h-2 rounded-full ${dotColour} ${status === "checking" ? "animate-pulse" : ""}`}
+          className={`inline-block w-2 h-2 rounded-full ${dotColour} ${status === "checking" || warmup === "warming" ? "animate-pulse" : ""}`}
         />
-        <span className="font-sans text-caption">backend</span>
+        <span className="font-sans text-caption">{label}</span>
       </button>
 
       {open && (

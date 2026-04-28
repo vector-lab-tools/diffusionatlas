@@ -166,6 +166,16 @@ export function DenoiseTrajectory() {
   // AbortController for in-flight runs. Stored in a ref so the Stop
   // button can reach the live controller without re-renders.
   const abortRef = useRef<AbortController | null>(null);
+
+  // Batch run: kick off N trajectories in sequence. Combined with the
+  // shuffle / +1 seed mode this walks a range of seeds; each
+  // intermediate run is auto-locked so all N layers persist for
+  // comparison rather than overwriting each other. 1 = current
+  // single-run behaviour. Stop aborts the whole batch, not just the
+  // current iteration, via `batchAbortRef`.
+  const [batchSize, setBatchSize] = useState(1);
+  const [batchProgress, setBatchProgress] = useState<{ done: number; total: number } | null>(null);
+  const batchAbortRef = useRef(false);
   // 12 is the modern "fast and good" sweet spot for SD 1.5 with the
   // DPMSolverMultistepScheduler ("DPM++ 2M Karras") the backend pins —
   // converges noticeably faster than Euler or PNDM, so 12 steps now

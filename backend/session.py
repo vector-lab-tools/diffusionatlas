@@ -15,9 +15,29 @@ from device import (
     detect_device,
     default_dtype,
     dtype_for_model,
+    estimated_footprint_gb,
+    fit_check,
     is_apple_silicon,
     total_memory_gb,
+    MIXED_PRECISION_VAE,
 )
+
+
+class ModelTooLargeError(Exception):
+    """Raised when a model wouldn't fit in available memory and `force`
+    is not set. Callers map this to HTTP 413 Payload Too Large."""
+
+    def __init__(self, model_id: str, footprint_gb: float, available_gb: float, headroom_gb: float):
+        self.model_id = model_id
+        self.footprint_gb = footprint_gb
+        self.available_gb = available_gb
+        self.headroom_gb = headroom_gb
+        super().__init__(
+            f"Model {model_id} estimated at {footprint_gb:.1f} GB, "
+            f"only {available_gb:.1f} GB available "
+            f"(after {headroom_gb:.1f} GB OS/browser headroom). "
+            f"Pass overrideMemoryCheck=true to load anyway, or pick a smaller model."
+        )
 
 
 class SessionState:
@@ -29,24 +49,74 @@ class SessionState:
         self.pipeline: Any = None
         self.current_model_id: str | None = None
 
-    def load(self, model_id: str) -> None:
+    def load(self, model_id: str, force: bool = False) -> None:
         if self.current_model_id == model_id and self.pipeline is not None:
             return
+
+        # Refuse loads that would push the OS into encrypted swap unless
+        # the caller has explicitly opted in. This is the dev-mode
+        # warning made teeth: a 24 GB MacBook should not silently try
+        # to load FLUX-dev at fp32. The frontend can prompt and re-call
+        # with force=True if the user wants to risk it.
+        if not force:
+            fits, footprint, available, headroom = fit_check(model_id, self.device)
+            if not fits:
+                raise ModelTooLargeError(model_id, footprint, available, headroom)
 
         # Pick the right precision for this model+device combination.
         self.dtype = dtype_for_model(model_id, self.device)
 
-        # Unload previous pipeline before loading the next so we don't hold two.
+        # Aggressive cleanup before loading the next pipeline. On 24 GB
+        # MacBooks SD 1.5 at fp32 leaves enough resident weight that
+        # holding two simultaneously will push the kernel into encrypted
+        # swap. `del` + gc + empty_cache on every supported device drops
+        # the previous pipeline before we ask diffusers for the next.
+        if self.pipeline is not None:
+            try:
+                del self.pipeline
+            except Exception:
+                pass
         self.pipeline = None
         gc.collect()
         if self.device == "cuda":
             torch.cuda.empty_cache()
+        elif self.device == "mps":
+            try:
+                torch.mps.empty_cache()
+                # synchronize forces the command queue to drain before
+                # we measure or allocate again — without it, deferred
+                # frees on the GPU side mean empty_cache underreports
+                # how much was actually returned.
+                torch.mps.synchronize()
+            except Exception:
+                # Older torches don't expose torch.mps.empty_cache —
+                # gc.collect alone is the next best thing on MPS.
+                pass
 
         # Imported lazily so `import session` doesn't pull diffusers on cold start.
         from diffusers import DiffusionPipeline, DPMSolverMultistepScheduler
 
         pipe = DiffusionPipeline.from_pretrained(model_id, torch_dtype=self.dtype)
         pipe = pipe.to(self.device)
+
+        # Mixed-precision VAE: on SD 1.x/2.x with MIXED_PRECISION_VAE on,
+        # the U-Net and text encoder are loaded at fp16 (set above by
+        # dtype_for_model). The VAE is the part with the historic NaN
+        # underflow bug, so cast it back to fp32 individually. Net
+        # effect: ~3 GB peak instead of ~5-7 GB, no black images.
+        if (
+            MIXED_PRECISION_VAE
+            and self.device == "mps"
+            and self.dtype == torch.float16
+            and hasattr(pipe, "vae")
+        ):
+            try:
+                pipe.vae.to(torch.float32)
+            except Exception:
+                # Cast failures are non-fatal — the worst case is the
+                # VAE stays at fp16 and we get black images, which is
+                # the bug we already know how to spot.
+                pass
 
         # Force DPMSolverMultistepScheduler ("DPM++ 2M") in Karras-sigmas
         # mode. Two reasons:

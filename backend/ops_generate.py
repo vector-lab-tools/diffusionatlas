@@ -25,11 +25,22 @@ class GenerateRequest(BaseModel):
     cfg: float = Field(7.5, ge=0.0, le=30.0)
     width: int = Field(512, ge=64, le=2048)
     height: int = Field(512, ge=64, le=2048)
+    overrideMemoryCheck: bool = False
 
 
 def run(req: GenerateRequest, session_state) -> dict[str, Any]:
+    from session import ModelTooLargeError
     try:
-        session_state.load(req.modelId)
+        session_state.load(req.modelId, force=req.overrideMemoryCheck)
+    except ModelTooLargeError as e:
+        raise HTTPException(status_code=413, detail={
+            "code": "model_too_large",
+            "message": str(e),
+            "modelId": e.model_id,
+            "footprintGb": e.footprint_gb,
+            "availableGb": e.available_gb,
+            "headroomGb": e.headroom_gb,
+        })
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Failed to load model {req.modelId}: {e}")
 
