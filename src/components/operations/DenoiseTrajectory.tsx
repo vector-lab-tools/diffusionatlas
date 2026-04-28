@@ -690,9 +690,10 @@ export function DenoiseTrajectory() {
             {/* Canonical CFG values — browser surfaces them as a
                 dropdown, but arbitrary numbers still type-in fine. */}
             <datalist id="cfg-presets">
-              <option value="1" label="ignore prompt" />
+              <option value="0" label="prompt off (unconditional)" />
+              <option value="1" label="no amplification" />
               <option value="2.5" label="atmospheric" />
-              <option value="4" label="soft" />
+              <option value="4" label="soft amplification" />
               <option value="5" />
               <option value="6" />
               <option value="7" />
@@ -746,7 +747,7 @@ export function DenoiseTrajectory() {
           </label>
         </div>
         <p className="font-sans text-caption italic text-muted-foreground mt-2">
-          <span className="not-italic font-medium">CFG (classifier-free guidance):</span> how strongly the model is pushed toward the prompt at each denoising step. <span className="font-mono not-italic">1</span> ignores the prompt; <span className="font-mono not-italic">7.5</span> is the conventional balanced default; <span className="font-mono not-italic">12+</span> oversaturates and mode-collapses. Different CFGs produce different trajectories — the Guidance Sweep operation is built around this lever.
+          <span className="not-italic font-medium">CFG (classifier-free guidance):</span> how much the prompt's pull is <em>amplified</em> at each denoising step. The U-Net runs twice (with prompt + without) and outputs <span className="font-mono not-italic">unconditional + CFG × (conditional − unconditional)</span>. <span className="font-mono not-italic">0</span> = ignore the prompt entirely; <span className="font-mono not-italic">1</span> = use the prompt with no extra push; <span className="font-mono not-italic">7.5</span> = balanced default; <span className="font-mono not-italic">12+</span> = oversaturated / mode collapse. Different CFGs produce different trajectories — the Guidance Sweep operation is built around this lever.
         </p>
       </div>
 

@@ -424,7 +424,8 @@ export function LatentNeighbourhood() {
               className="input-editorial mt-1"
             />
             <datalist id="cfg-presets-nbr">
-              <option value="1" label="ignore prompt" />
+              <option value="0" label="prompt off" />
+              <option value="1" label="no amplification" />
               <option value="2.5" label="atmospheric" />
               <option value="4" label="soft" />
               <option value="7.5" label="balanced default" />
@@ -434,7 +435,7 @@ export function LatentNeighbourhood() {
           </label>
         </div>
         <p className="font-sans text-caption italic text-muted-foreground mt-2">
-          <span className="not-italic font-medium">CFG (classifier-free guidance)</span> is held constant at <span className="font-mono not-italic">{cfg}</span> across the neighbourhood — you're varying the seed, not the guidance, so the variable is reproduced cleanly. To see how CFG itself bends the manifold for this prompt + seed, use the Guidance Sweep operation instead.
+          <span className="not-italic font-medium">CFG (classifier-free guidance)</span> amplifies the prompt's pull on each step: <span className="font-mono not-italic">unconditional + CFG × (conditional − unconditional)</span>. Held constant at <span className="font-mono not-italic">{cfg}</span> across the neighbourhood so the seed is the only variable. <span className="font-mono not-italic">0</span> = prompt off; <span className="font-mono not-italic">1</span> = prompt on, no extra amplification; <span className="font-mono not-italic">7.5</span> = balanced default. To see how CFG itself bends the manifold for this prompt, use the Guidance Sweep operation.
         </p>
       </div>
 

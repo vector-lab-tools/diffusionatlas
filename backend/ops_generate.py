@@ -112,6 +112,37 @@ def run(req: GenerateRequest, session_state) -> dict[str, Any]:
     elapsed_ms = int((time.time() - started) * 1000)
     image = out.images[0]
 
+    # NaN-in-VAE detection. SD 1.5 + DPM++ 2M Karras + CFG ~7.5 on MPS
+    # at fp32 sometimes produces NaN latents at the end of the
+    # trajectory (Karras sigmas push very small at late steps; CFG
+    # amplification at certain values overshoots fp32). The VAE decodes
+    # NaN to all-zero pixels, giving a black image. Surface that as a
+    # 500 with diagnosis instead of returning a useless black square.
+    try:
+        extrema = image.getextrema()
+        # PIL extrema is per-band: ((min, max), (min, max), (min, max))
+        # for RGB, or (min, max) for grayscale. Flatten and take the max.
+        if isinstance(extrema[0], tuple):
+            max_val = max(b[1] for b in extrema)
+        else:
+            max_val = extrema[1]
+        if max_val < 4:
+            raise HTTPException(
+                status_code=500,
+                detail=(
+                    "Generation produced an all-black image — almost certainly NaN in the "
+                    "VAE decode. Common cause: DPM++ 2M Karras + SD 1.5 + fp32 on MPS at "
+                    f"CFG {req.cfg} hits a numerical knife-edge late in the trajectory. "
+                    "Try: a different CFG (4 or 12 usually clear it), increase steps "
+                    "(more steps = larger sigmas, more numerical headroom), or set "
+                    "MIXED_PRECISION_VAE=1 on the backend."
+                ),
+            )
+    except HTTPException:
+        raise
+    except Exception:
+        pass  # Don't let extrema-check failure mask the real result.
+
     buf = BytesIO()
     image.save(buf, format="PNG")
     b64 = base64.b64encode(buf.getvalue()).decode("ascii")

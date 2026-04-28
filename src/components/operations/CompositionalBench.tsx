@@ -574,7 +574,8 @@ export function CompositionalBench() {
             className="input-editorial mt-1"
           />
           <datalist id="cfg-presets-bench">
-            <option value="1" label="ignore prompt" />
+            <option value="0" label="prompt off" />
+            <option value="1" label="no amplification" />
             <option value="4" label="soft" />
             <option value="7.5" label="balanced default" />
             <option value="12" label="aggressive" />
@@ -586,7 +587,7 @@ export function CompositionalBench() {
         </div>
       </div>
       <p className="font-sans text-caption italic text-muted-foreground -mt-2 mb-4">
-        <span className="not-italic font-medium">CFG (classifier-free guidance)</span> is held at <span className="font-mono not-italic">{cfg}</span> across every task so per-task scoring is comparable. <span className="font-mono not-italic">7.5</span> is the convention; bump it for a stricter prompt-adherence regime, drop it for softer outputs.
+        <span className="not-italic font-medium">CFG (classifier-free guidance)</span> amplifies the prompt's pull on each step: <span className="font-mono not-italic">unconditional + CFG × (conditional − unconditional)</span>. Held at <span className="font-mono not-italic">{cfg}</span> across every task so per-task scoring is comparable. <span className="font-mono not-italic">0</span> = prompt off; <span className="font-mono not-italic">7.5</span> = balanced default; <span className="font-mono not-italic">12+</span> = oversaturated.
       </p>
 
       {/* Compare-with: cross-backend */}

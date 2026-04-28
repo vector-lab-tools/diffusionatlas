@@ -144,10 +144,17 @@ class SessionState:
         # enables the second-order solver. Both are safe across SD 1.x /
         # 2.x / SDXL / SD 3.
         try:
+            # use_karras_sigmas=False: Karras sigma scheduling pushes the
+            # noise level very low late in the trajectory, which combined
+            # with CFG ~7.5 on SD 1.5 fp32 on MPS produces NaN latents
+            # and an all-black output (the VAE decodes NaN to zeros).
+            # Standard linear sigmas are slightly less convergent at very
+            # low step counts but numerically stable across the full CFG
+            # range.
             pipe.scheduler = DPMSolverMultistepScheduler.from_config(
                 pipe.scheduler.config,
                 algorithm_type="dpmsolver++",
-                use_karras_sigmas=True,
+                use_karras_sigmas=False,
             )
         except Exception:
             # If the model's scheduler config isn't compatible (some FLUX /

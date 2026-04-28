@@ -11,7 +11,7 @@
 
 **Author:** David M. Berry
 **Institution:** University of Sussex
-**Version:** 0.3.11
+**Version:** 0.3.12
 **Date:** 28 April 2026
 **Licence:** MIT
 
@@ -240,6 +240,7 @@ The Atlas operations test specific claims of the framework. Denoise Trajectory m
 - [x] **Temp-vs-locked layer model** with per-row padlock toggle, **shuffle/increment seed modes** with per-mode dice animations, **DPMSolverMultistepScheduler (DPM++ 2M Karras)** swap to fix the SD 1.5 PNDM `index 1001` bounds bug, **native-resolution auto-snap** in Width/Height selects via a new `BackendHealthContext`, **per-layer PDF grouping**, sticky StatusBar, and IDB-resilience layer with `withDB()` retry-on-close (v0.3.8)
 - [x] **Stop / abort button** for in-flight trajectory runs (AbortController-wired); partial trajectories are kept as temp layers so a stopped run is still inspectable. **Shuffle / increment seed modes propagated** to Guidance Sweep, Latent Neighbourhood, and Compositional Bench, with a `seedRef` pattern that lets in-flight closures pick up the freshly-rolled seed without waiting for React to re-render (v0.3.9)
 - [x] **Memory hygiene** for 24 GB unified-memory boxes: `PYTORCH_MPS_HIGH_WATERMARK_RATIO=0.7` set before torch import, `torch.mps.empty_cache()` + `synchronize()` on every model swap, opt-in `MIXED_PRECISION_VAE` flag (fp16 U-Net + fp32 VAE) for SD 1.x/2.x, **`POST /warmup`** endpoint at 256×256 to cache MPS kernels without spiking activation memory, **pre-load fit check** with HTTP 413 + `overrideMemoryCheck` escape hatch, **StatusBar memory warning** when the loaded model wouldn't fit (v0.3.10)
+- [x] **Stop everywhere + click-to-modal everywhere + CFG fixed**: stop buttons on Sweep / Neighbourhood / Bench (matching Trajectory); cells across all four ops open the same `FrameModal` with RGB-overlay histogram and image-stats panel; CFG explained per operation with proper formula `unconditional + CFG × (conditional − unconditional)`, datalist of canonical values; CFG bug fix in Neighbourhood + Bench (was reading `settings.defaults.cfg = 0` from the FLUX-schnell-tuned default and producing prompt-off noise on SD 1.5/SDXL — both now expose their own CFG input defaulting to 7.5); local-lane resolution now reads `nativeWidth`/`Height` from `/health` with a 512×512 fallback so 1024×SD-1.5 OOMs are eliminated; backend pre-flight resolution check (HTTP 422), empty-prompt + empty-negative-prompt defences, NaN-in-VAE detection with diagnostic message; PDF exports gain Diffusion Atlas branding (top wordmark + per-page footer stamp); switched to DPM++ 2M (no Karras sigmas) to avoid the late-trajectory underflow that produced black images at CFG ≈ 7.5; Bench CLIP score line includes plain-English bands; Clippy bubble dismiss × (v0.3.11–0.3.12)
 - [x] **Clippy easter egg** — type `clippy` anywhere outside an input field to summon a diffusion-flavoured paperclip with quips on latents-vs-tokens, the vector turn, and meta-commentary on what you're doing in the app
 - [ ] Hackerman easter egg
 - [ ] Object-detection-based bench scoring (proper GenEval rather than CLIP cosine)

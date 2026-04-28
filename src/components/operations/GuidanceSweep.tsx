@@ -495,7 +495,7 @@ export function GuidanceSweep() {
           </label>
         </div>
         <p className="font-sans text-caption italic text-muted-foreground mt-2">
-          <span className="not-italic font-medium">CFG (classifier-free guidance)</span> controls how strongly the model is pushed toward the prompt. The sweep generates the same prompt + seed at each value in the list so you can see where the controllability surface bends. <span className="font-mono not-italic">1</span> ignores the prompt entirely; <span className="font-mono not-italic">7.5</span> is the balanced default; <span className="font-mono not-italic">12+</span> oversaturates and mode-collapses. The drift curve below the grid measures perceptual distance from the CFG-7.5 baseline.
+          <span className="not-italic font-medium">CFG (classifier-free guidance)</span> amplifies the prompt's pull on each denoising step: output = <span className="font-mono not-italic">unconditional + CFG × (conditional − unconditional)</span>. <span className="font-mono not-italic">0</span> = prompt off; <span className="font-mono not-italic">1</span> = prompt on, no extra amplification; <span className="font-mono not-italic">7.5</span> = balanced default; <span className="font-mono not-italic">12+</span> = oversaturated / mode collapse. The sweep generates the same prompt + seed at each value so you can see where the controllability surface bends. The drift curve measures perceptual distance from the CFG-7.5 baseline.
         </p>
       </div>
 
