@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { UMAP } from "umap-js";
 import { X, Plus, Lock, Unlock, Square, Search, Play } from "lucide-react";
 import { useSettings, effectiveSteps } from "@/context/DiffusionSettingsContext";
@@ -252,27 +252,54 @@ export function DenoiseTrajectory() {
 
   const isLocal = settings.backend === "local";
 
-  // Reproject when the user toggles PCA/UMAP. UMAP needs ≥4 samples; below
+  // One projection helper used by both the in-flight active run and
+  // the saved-layer reprojection effects. UMAP needs ≥4 samples; below
   // that we silently fall back to PCA so the curve stays sensible.
-  useEffect(() => {
-    if (latents.length < 2) return;
-    if (projection === "pca" || latents.length < 4) {
-      setPoints(pca3D(latents));
-      return;
-    }
+  // The `useCallback` keeps it stable so the effects below don't fire
+  // every render.
+  const project = useCallback((arr: Float32Array[]): Point3[] => {
+    if (arr.length < 2) return [];
+    if (projection === "pca" || arr.length < 4) return pca3D(arr);
     try {
-      const data = latents.map((l) => Array.from(l));
+      const data = arr.map((l) => Array.from(l));
       const umap = new UMAP({
         nComponents: 3,
-        nNeighbors: Math.min(latents.length - 1, 5),
+        nNeighbors: Math.min(arr.length - 1, 5),
         minDist: 0.1,
       });
       const projected = umap.fit(data) as number[][];
-      setPoints(projected.map((p) => [p[0], p[1], p[2]]));
+      return projected.map((p) => [p[0], p[1], p[2]]);
     } catch {
-      setPoints(pca3D(latents));
+      return pca3D(arr);
     }
-  }, [projection, latents]);
+  }, [projection]);
+
+  // Effect 1: project the in-flight active run's latents whenever new
+  // ones stream in or the projection toggles.
+  useEffect(() => {
+    if (latents.length < 2) return;
+    setPoints(project(latents));
+  }, [latents, project]);
+
+  // Effect 2: reproject every saved layer (temp + locked) when the
+  // projection toggles. Each layer stores its `points` at save time;
+  // without this, flipping PCA → UMAP only changed the live run and
+  // saved layers stayed frozen at their original PCA projection (so
+  // UMAP looked identical to PCA on previously-rendered curves).
+  useEffect(() => {
+    layerStack.setLayers((prev) =>
+      prev.map((layer) =>
+        layer.latents.length >= 2
+          ? { ...layer, points: project(layer.latents) }
+          : layer,
+      ),
+    );
+    // We deliberately depend only on `projection` (via project's
+    // identity) — not on the layers themselves — to avoid an
+    // infinite update loop. New layers are projected at save time
+    // with the current projection, so they don't need this pass.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [project]);
 
   async function run(opts: { lockOnComplete?: boolean } = {}) {
     if (!isLocal) {
@@ -316,7 +343,10 @@ export function DenoiseTrajectory() {
     try {
       res = await fetch(`${settings.localBaseUrl}/trajectory`, {
         method: "POST",
-        headers: { "Content-Type": "application/json" },
+        headers: {
+          "Content-Type": "application/json",
+          "X-Diffusion-Atlas": "1",
+        },
         body: JSON.stringify({
           modelId: settings.modelId,
           prompt,
@@ -437,7 +467,10 @@ export function DenoiseTrajectory() {
           stepStats: collectedStats.slice(),
           finalImage: null,
           responseTimeMs: null,
-          points: pca3D(collected),
+          // Project with the current projection mode so the saved
+          // layer matches what the user is looking at. Effect 2
+          // above re-projects on subsequent mode toggles.
+          points: project(collected),
         };
         setSavedLayers((prev) => [newLayer, ...prev.filter((l) => l.locked)]);
       }
@@ -451,10 +484,10 @@ export function DenoiseTrajectory() {
       return;
     }
 
-    // Initial projection (PCA — UMAP toggle re-runs via useEffect).
+    // Initial projection with the current mode. The PCA/UMAP toggle
+    // re-runs via the two projection effects above.
     if (collected.length >= 2) {
-      const projected = pca3D(collected);
-      setPoints(projected);
+      setPoints(project(collected));
     }
     setResponseTimeMs(respMs);
 
@@ -518,7 +551,10 @@ export function DenoiseTrajectory() {
           stepStats: collectedStats.slice(),
           finalImage: finalUrl,
           responseTimeMs: respMs,
-          points: pca3D(collected),
+          // Project with the current projection mode so the saved
+          // layer matches what the user is looking at. Effect 2
+          // above re-projects on subsequent mode toggles.
+          points: project(collected),
         };
         return [newLayer, ...prev.filter((l) => l.locked)];
       });
@@ -1344,22 +1380,41 @@ function StepScrubberModal({
     };
   }, [preview]);
 
-  // Auto-playback: advance the selected step every `playbackMs`,
-  // wrapping to 0 when we hit the last captured step. Lets the user
-  // watch the denoising as a small animation rather than dragging the
-  // slider by hand. Dragging the slider doesn't pause — it just seeks
-  // to that index and playback continues from there.
+  // Auto-playback: advance the selected step every `playbackMs`.
+  //   "pingpong" (default): forward to the last step, then reverse to
+  //                         step 1, then forward again — never jumps
+  //                         from final → noise, so the eye reads
+  //                         denoising and re-noising as one continuous
+  //                         arc and the visual structure of the
+  //                         trajectory is preserved.
+  //   "loop":     classic forward-only, snaps back to step 1 at the end.
+  // Dragging the slider while playing seeks but doesn't pause.
   const [isPlaying, setIsPlaying] = useState(false);
   const [playbackMs, setPlaybackMs] = useState(250);
+  const [playMode, setPlayMode] = useState<"pingpong" | "loop">("pingpong");
+  // Direction for ping-pong, kept in a ref so flipping at the
+  // boundaries doesn't trigger a re-render.
+  const directionRef = useRef<1 | -1>(1);
   useEffect(() => {
     if (!isPlaying || captured < 2) return;
     const t = setInterval(() => {
-      onChange((idx + 1) % captured);
+      if (playMode === "loop") {
+        onChange((idx + 1) % captured);
+        return;
+      }
+      // Ping-pong: step in the current direction, flip at boundaries.
+      let next = idx + directionRef.current;
+      if (next >= captured) {
+        directionRef.current = -1;
+        next = captured - 2; // step backward from final
+      } else if (next < 0) {
+        directionRef.current = 1;
+        next = 1; // step forward from step 1
+      }
+      onChange(Math.max(0, Math.min(captured - 1, next)));
     }, playbackMs);
     return () => clearInterval(t);
-    // We deliberately depend on `idx` so the next tick is computed
-    // from the current selected index, not a stale snapshot.
-  }, [isPlaying, captured, idx, playbackMs, onChange]);
+  }, [isPlaying, captured, idx, playbackMs, playMode, onChange]);
   // If the run is still in flight or otherwise didn't capture every
   // requested step, show that explicitly so "Step 12 of 20 · capturing"
   // reads correctly mid-stream and "Step 16 of 20 (capture stopped)"
@@ -1436,52 +1491,59 @@ function StepScrubberModal({
               </span>
             </div>
 
-            {/* Play / speed controls. Auto-loops when reaching the
-                final captured step. Dragging the slider while playing
-                seeks but doesn't pause. */}
-            <div className="flex items-center gap-3 mb-3 font-sans text-caption">
+            {/* Tiny optional playback controls — just an icon button
+                + a numeric speed select. The slider above is the
+                primary affordance; these are for letting it run
+                hands-free while you watch. */}
+            <div className="flex items-center gap-2 mb-3 font-sans text-[10px] text-muted-foreground">
               <button
                 type="button"
                 onClick={() => setIsPlaying((p) => !p)}
                 disabled={captured < 2}
                 className={
                   isPlaying
-                    ? "px-3 py-1 border border-burgundy bg-burgundy text-cream rounded-sm flex items-center gap-1.5"
-                    : "btn-editorial-secondary px-3 py-1 flex items-center gap-1.5"
+                    ? "h-5 w-5 inline-flex items-center justify-center border border-burgundy bg-burgundy text-cream rounded-sm"
+                    : "h-5 w-5 inline-flex items-center justify-center border border-parchment-dark text-muted-foreground hover:text-burgundy hover:border-burgundy rounded-sm transition-colors"
                 }
-                title={isPlaying ? "Pause auto-playback" : "Play the denoising trajectory at the chosen speed"}
+                title={isPlaying ? "Stop auto-playback" : "Play the denoising trajectory at the chosen speed"}
+                aria-label={isPlaying ? "Stop" : "Play"}
               >
-                {isPlaying ? (
-                  <>
-                    <Square size={11} fill="currentColor" /> Stop
-                  </>
-                ) : (
-                  <>
-                    <Play size={11} fill="currentColor" /> Play
-                  </>
-                )}
+                {isPlaying ? <Square size={9} fill="currentColor" /> : <Play size={9} fill="currentColor" />}
               </button>
-              <label
-                className="flex items-center gap-1.5 text-muted-foreground"
-                title="Time between frames during auto-playback. Faster = jumpier; slower = more time per step to read scalars and the histogram."
+              <select
+                value={playbackMs}
+                onChange={(e) => setPlaybackMs(parseInt(e.target.value, 10))}
+                className="border border-parchment-dark rounded-sm bg-card px-1 py-0.5 text-[10px]"
+                title="Time between frames during auto-playback"
               >
-                <span className="uppercase tracking-wider cursor-help underline decoration-dotted decoration-muted-foreground/40 underline-offset-4">
-                  Speed
-                </span>
-                <select
-                  value={playbackMs}
-                  onChange={(e) => setPlaybackMs(parseInt(e.target.value, 10))}
-                  className="input-editorial py-0.5 text-caption"
-                >
-                  <option value={100}>fast (100 ms)</option>
-                  <option value={250}>normal (250 ms)</option>
-                  <option value={500}>slow (500 ms)</option>
-                  <option value={1000}>study (1 s)</option>
-                  <option value={2000}>dwell (2 s)</option>
-                </select>
-              </label>
-              <span className="text-muted-foreground italic ml-auto">
-                {isPlaying ? "looping · click Stop to pause" : "looping playback · drag slider to seek"}
+                <option value={100}>100 ms</option>
+                <option value={250}>250 ms</option>
+                <option value={500}>500 ms</option>
+                <option value={1000}>1 s</option>
+                <option value={2000}>2 s</option>
+              </select>
+              <button
+                type="button"
+                onClick={() => {
+                  setPlayMode((m) => (m === "pingpong" ? "loop" : "pingpong"));
+                  directionRef.current = 1;
+                }}
+                className="h-5 px-1.5 inline-flex items-center justify-center border border-parchment-dark rounded-sm text-muted-foreground hover:text-burgundy hover:border-burgundy transition-colors text-[10px]"
+                title={
+                  playMode === "pingpong"
+                    ? "Ping-pong: forward to final, then reverse to step 1, then forward again. Click to switch to forward-only loop."
+                    : "Forward-only loop: snaps back to step 1 at the end. Click to switch to ping-pong."
+                }
+                aria-label={`Playback mode: ${playMode}`}
+              >
+                {playMode === "pingpong" ? "↔" : "↻"}
+              </button>
+              <span className="italic ml-auto">
+                {isPlaying
+                  ? playMode === "pingpong"
+                    ? `bouncing ${directionRef.current === 1 ? "→" : "←"}`
+                    : "looping"
+                  : "drag slider to seek · ▶ to play"}
               </span>
             </div>
 

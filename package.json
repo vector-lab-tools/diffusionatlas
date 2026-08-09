@@ -1,7 +1,9 @@
 {
   "name": "diffusion-atlas",
-  "version": "0.3.13",
+  "version": "0.4.0",
   "private": true,
+  "license": "GPL-3.0-or-later",
+  "author": "David M. Berry",
   "scripts": {
     "dev": "next dev",
     "build": "next build",

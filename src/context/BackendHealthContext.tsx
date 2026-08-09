@@ -142,7 +142,10 @@ export function BackendHealthProvider({ children }: { children: ReactNode }) {
       try {
         const res = await fetch(`${settings.localBaseUrl}/warmup`, {
           method: "POST",
-          headers: { "Content-Type": "application/json" },
+          headers: {
+            "Content-Type": "application/json",
+            "X-Diffusion-Atlas": "1",
+          },
           body: JSON.stringify({ modelId: settings.modelId }),
         });
         if (res.status === 413) {

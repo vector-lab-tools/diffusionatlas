@@ -1,0 +1,36 @@
+Diffusion Atlas
+Copyright (C) 2025-2026 David M. Berry
+
+This program is free software: you can redistribute it and/or modify
+it under the terms of the GNU General Public License as published by
+the Free Software Foundation, either version 3 of the License, or
+(at your option) any later version.
+
+This program is distributed in the hope that it will be useful,
+but WITHOUT ANY WARRANTY; without even the implied warranty of
+MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+GNU General Public License for more details.
+
+You should have received a copy of the GNU General Public License
+along with this program.  If not, see <https://www.gnu.org/licenses/>.
+
+The full text of the GNU General Public License version 3 is in the
+file COPYING in this repository.
+
+------------------------------------------------------------------------
+Retroactive relicensing notice
+------------------------------------------------------------------------
+
+David M. Berry is the sole copyright holder of Diffusion Atlas. As sole
+copyright holder, he hereby relicenses all past, present, and future
+versions of Diffusion Atlas — including every prior release and every
+prior git commit (v0.1.0 through the current release and any earlier
+unversioned states) — under the GNU General Public License, version 3
+or (at your option) any later version.
+
+This relicensing supersedes any earlier licence statement (including
+the "MIT" line that appeared in earlier README files) for all versions
+of the work. Copies obtained under a previous licence statement may
+continue to be used under that statement's terms; new copies and
+derivative works are governed by the GPLv3-or-later terms set out
+above.

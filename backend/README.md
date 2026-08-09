@@ -53,4 +53,4 @@ The session keeps one pipeline in memory at a time. Switching `modelId` between 
 
 ## Licence
 
-MIT, same as the parent project.
+GNU General Public License, version 3 or later (GPL-3.0-or-later), same as the parent project. See `../LICENSE` and `../COPYING`. All prior versions are retroactively relicensed under the same terms.
