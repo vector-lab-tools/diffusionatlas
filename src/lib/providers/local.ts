@@ -41,7 +41,14 @@ export const localProvider: DiffusionProvider = {
     try {
       res = await fetch(`${baseUrl}/generate`, {
         method: "POST",
-        headers: { "Content-Type": "application/json" },
+        headers: {
+          "Content-Type": "application/json",
+          // Identity handshake — the backend rejects non-Diffusion-
+          // Atlas callers with a 401, so any other web app on the
+          // user's machine can't drive /generate even if it finds
+          // the port.
+          "X-Diffusion-Atlas": "1",
+        },
         body: JSON.stringify(req),
       });
     } catch (err) {

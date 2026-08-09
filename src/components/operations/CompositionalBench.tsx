@@ -419,7 +419,10 @@ export function CompositionalBench() {
     try {
       const res = await fetch(`${settings.localBaseUrl}/score`, {
         method: "POST",
-        headers: { "Content-Type": "application/json" },
+        headers: {
+          "Content-Type": "application/json",
+          "X-Diffusion-Atlas": "1",
+        },
         body: JSON.stringify({
           images: scorable.map(({ r }) => r.imageDataUrl),
           prompts: scorable.map(({ r }) => r.task.prompt),
