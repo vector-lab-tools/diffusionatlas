@@ -9,3 +9,6 @@ backend/.venv
 backend/*.pyc
 tsconfig.tsbuildinfo
 next-env.d.ts
+
+# Local scratch inbox (never commit)
+_tmp/
