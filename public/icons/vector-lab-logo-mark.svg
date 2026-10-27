@@ -1,13 +1,6 @@
 <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 100 100">
   <title>Vector Lab mark</title>
-  <style>
-    .edge { stroke: #1a1aff; }
-    @media (prefers-color-scheme: dark) { .edge { stroke: #8a90ff; } }
-  </style>
-  <g class="edge" fill="none" stroke-width="3.4" stroke-linecap="round" stroke-linejoin="round">
-    <path d="M 12 18 L 88 18 L 50 86 Z"/>
-    <path d="M 50 30 L 12 18"/>
-    <path d="M 50 30 L 88 18"/>
-    <path d="M 50 30 L 50 86"/>
-  </g>
+  <polygon points="6.03,14.50 93.97,14.50 86.03,21.50 13.97,21.50" fill="#1a1aff"/>
+  <polygon points="93.97,14.50 50.00,93.17 48.05,82.32 83.99,18.01" fill="#4a2aff"/>
+  <polygon points="50.00,93.17 6.03,14.50 16.01,18.01 51.95,82.32" fill="#1a6aff"/>
 </svg>

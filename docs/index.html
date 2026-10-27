@@ -139,6 +139,7 @@
   <span><b>Version</b> 0.4.1</span>
   <span><b>Licence</b> GPL-3.0-or-later</span>
   <span><b>Repository</b> <a href="https://github.com/vector-lab-tools/diffusionatlas">vector-lab-tools/diffusionatlas</a></span>
+  <span><b>DOI</b> <a href="https://doi.org/10.5281/zenodo.23715023">10.5281/zenodo.23715023</a></span>
 </div>
 
 <p>Diffusion Atlas is a vector-native research instrument for studying how diffusion models generate images geometrically. Where <a href="https://github.com/vector-lab-tools/manifold-atlas">Manifold Atlas</a> reads the static manifold of a frozen embedding model, Diffusion Atlas reads the generative trajectory of a denoising model: the path through latent space that produces an image. Four operations run across hosted APIs (Replicate, Fal) and a local FastAPI backend (CUDA or Apple Silicon). Everything persists in the browser; nothing leaves your machine unless you call out to a hosted provider.</p>
@@ -293,6 +294,19 @@ uvicorn main:app --reload</code></pre>
   <li><b>Out of memory on local backend.</b> Pick a smaller model (SD1.5 fits in 8 GB, SDXL wants 12+ GB, SD3 and FLUX want 24 GB). The backend logs the required and available memory on load.</li>
   <li><b>Denoise Trajectory shows no thumbnails.</b> The <b>Preview every</b> field is zero. Set it to 1 (every step) or 5 (every fifth step).</li>
 </ul>
+
+<h2 id="citation">Citation</h2>
+
+<p>If you use Diffusion Atlas in published research, please cite the archived release. The concept DOI below always resolves to the latest version; use the version DOI for a specific release.</p>
+
+<pre><code>@software{berry_diffusionatlas,
+  author    = {Berry, David M.},
+  title     = {Diffusion Atlas: Manifold geometry and benchmarking for diffusion models},
+  year      = {2026},
+  publisher = {Zenodo},
+  doi       = {10.5281/zenodo.23715023},
+  url       = {https://github.com/vector-lab-tools/diffusionatlas}
+}</code></pre>
 
 <h2 id="licence">Licence</h2>
 

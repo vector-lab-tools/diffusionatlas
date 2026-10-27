@@ -9,10 +9,13 @@
 
 **Manifold geometry and benchmarking for diffusion models.**
 
+[![DOI](https://zenodo.org/badge/DOI/10.5281/zenodo.23715023.svg)](https://doi.org/10.5281/zenodo.23715023)
+
 **Author:** David M. Berry
 **Institution:** University of Sussex
 **Version:** 0.4.1
-**Date:** 9 August 2026
+**Date:** 27 October 2026
+**DOI:** [10.5281/zenodo.23715023](https://doi.org/10.5281/zenodo.23715023) (concept, always resolves to latest version)
 **Licence:** GNU General Public License, version 3 or later (GPL-3.0-or-later). See `LICENSE` and `COPYING`. All prior versions are retroactively relicensed under the same terms.
 
 Diffusion Atlas is a vector-native research tool for studying how diffusion models generate images geometrically. Where [Manifold Atlas](https://github.com/vector-lab-tools/manifold-atlas) reads the static manifold of a frozen embedding model, Diffusion Atlas reads the generative trajectory of a denoising model: the path through latent space that produces an image. It unifies an **Atlas** view (interpretability and geometry) with a **Bench** view (scored compositional evaluation) in a single instrument.
@@ -272,10 +275,27 @@ The Atlas operations test specific claims of the framework. Denoise Trajectory m
 - Rombach, R. et al. (2022) 'High-Resolution Image Synthesis with Latent Diffusion Models'. *CVPR*. Available at: https://arxiv.org/abs/2112.10752
 - Park, Y.-H. et al. (2023) 'Understanding the Latent Space of Diffusion Models through the Lens of Riemannian Geometry'. Available at: https://arxiv.org/abs/2307.12868
 
+## Citation
+
+If you use Diffusion Atlas in published research, please cite the archived release:
+
+```bibtex
+@software{berry_diffusionatlas,
+  author       = {Berry, David M.},
+  title        = {Diffusion Atlas: Manifold geometry and benchmarking for diffusion models},
+  year         = {2026},
+  publisher    = {Zenodo},
+  doi          = {10.5281/zenodo.23715023},
+  url          = {https://github.com/vector-lab-tools/diffusionatlas}
+}
+```
+
+The concept DOI above always resolves to the latest archived version. For a specific release, use its version DOI (e.g. [10.5281/zenodo.23715024](https://doi.org/10.5281/zenodo.23715024) for v0.4.1).
+
 ## Acknowledgements
 
 Concept and Design by David M. Berry, implemented with Claude Code. Design system adapted from the [CCS Workbench](https://github.com/dmberry/ccs-wb).
 
 ## Licence
 
-MIT
+GNU General Public License, version 3 or later (GPL-3.0-or-later). See `LICENSE` and `COPYING`. All prior versions are retroactively relicensed under the same terms.
