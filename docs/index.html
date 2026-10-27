@@ -1,0 +1,313 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Diffusion Atlas — manifold geometry and benchmarking for diffusion models</title>
+<meta name="description" content="A vector-native research instrument for studying how diffusion models generate images geometrically. Atlas (geometry) and Bench (compositional evaluation) in one app.">
+<link rel="icon" href="favicon.svg" type="image/svg+xml">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Fraunces:opsz,wght@9..144,400;9..144,600;9..144,700&family=Inter:wght@400;500;600&family=JetBrains+Mono:wght@400;500&display=swap">
+<style>
+  :root {
+    --bg: #0f1012;
+    --bg-elev: #16181c;
+    --bg-code: #0a0b0d;
+    --ink: #e8e4dc;
+    --ink-dim: #a6a197;
+    --ink-faint: #6b6760;
+    --rule: #26262a;
+    --accent: #c7a068;      /* gold */
+    --accent-warm: #b45a3c; /* burgundy */
+    --link: #c7a068;
+    --max: 760px;
+  }
+  * { box-sizing: border-box; }
+  html, body { margin: 0; padding: 0; background: var(--bg); color: var(--ink); }
+  body {
+    font-family: "Inter", system-ui, -apple-system, sans-serif;
+    font-size: 16px; line-height: 1.65;
+    -webkit-font-smoothing: antialiased;
+  }
+  a { color: var(--link); text-decoration: none; border-bottom: 1px solid rgba(199,160,104,0.3); }
+  a:hover { border-bottom-color: var(--link); }
+  code, pre, kbd { font-family: "JetBrains Mono", ui-monospace, monospace; font-size: 0.92em; }
+  code { background: var(--bg-code); padding: 0.1em 0.35em; border-radius: 3px; color: var(--accent); border: 1px solid var(--rule); }
+  pre {
+    background: var(--bg-code); padding: 1rem 1.1rem; border-radius: 4px;
+    border: 1px solid var(--rule); overflow-x: auto; line-height: 1.55;
+  }
+  pre code { background: none; padding: 0; border: none; color: var(--ink); }
+
+  header.top {
+    border-bottom: 1px solid var(--rule);
+    padding: 1.3rem 1.5rem;
+  }
+  header.top .inner {
+    max-width: var(--max); margin: 0 auto;
+    display: flex; align-items: center; justify-content: space-between; gap: 1rem;
+  }
+  header.top img.logo { height: 32px; }
+  header.top nav { display: flex; gap: 1.3rem; font-size: 0.9rem; }
+  header.top nav a { color: var(--ink-dim); border-bottom: none; }
+  header.top nav a:hover { color: var(--ink); }
+
+  main { max-width: var(--max); margin: 0 auto; padding: 3rem 1.5rem 6rem; }
+
+  h1, h2, h3 { font-family: "Fraunces", Georgia, serif; font-weight: 600; letter-spacing: -0.01em; }
+  h1 { font-size: 2.4rem; line-height: 1.15; margin: 0 0 0.6rem; }
+  h2 {
+    font-size: 1.5rem; margin: 3.5rem 0 1rem;
+    padding-bottom: 0.4rem; border-bottom: 1px solid var(--rule);
+  }
+  h3 { font-size: 1.15rem; margin: 2rem 0 0.6rem; color: var(--ink); }
+
+  .lede { font-family: "Fraunces", Georgia, serif; font-size: 1.25rem; line-height: 1.5; color: var(--ink-dim); margin: 0 0 2rem; }
+
+  .meta {
+    display: flex; flex-wrap: wrap; gap: 1.2rem;
+    font-size: 0.85rem; color: var(--ink-faint);
+    margin: 0 0 2.5rem; padding: 0.8rem 0; border-top: 1px solid var(--rule); border-bottom: 1px solid var(--rule);
+  }
+  .meta b { color: var(--ink-dim); font-weight: 500; }
+
+  .callout {
+    background: var(--bg-elev); border-left: 3px solid var(--accent);
+    padding: 0.9rem 1.1rem; margin: 1.3rem 0; border-radius: 0 4px 4px 0;
+    font-size: 0.95rem;
+  }
+  .callout.warn { border-left-color: var(--accent-warm); }
+  .callout p:first-child { margin-top: 0; }
+  .callout p:last-child { margin-bottom: 0; }
+
+  ol, ul { padding-left: 1.3rem; }
+  li { margin: 0.3rem 0; }
+
+  table { border-collapse: collapse; width: 100%; margin: 1.2rem 0; font-size: 0.92rem; }
+  th, td { text-align: left; padding: 0.55rem 0.8rem; border-bottom: 1px solid var(--rule); vertical-align: top; }
+  th { color: var(--ink-dim); font-weight: 500; font-size: 0.82rem; letter-spacing: 0.03em; text-transform: uppercase; }
+
+  .screenshot {
+    margin: 1.5rem 0; padding: 2.5rem 1rem;
+    background: var(--bg-elev); border: 1px dashed var(--rule);
+    border-radius: 4px; text-align: center; color: var(--ink-faint);
+    font-size: 0.85rem;
+  }
+  .screenshot img { max-width: 100%; display: block; margin: 0 auto; border-radius: 4px; border: 1px solid var(--rule); }
+  .screenshot code { font-size: 0.8rem; }
+
+  .provider-grid { display: grid; grid-template-columns: 1fr; gap: 1rem; margin: 1.5rem 0; }
+  @media (min-width: 640px) { .provider-grid { grid-template-columns: 1fr 1fr; } }
+  .provider {
+    background: var(--bg-elev); border: 1px solid var(--rule); border-radius: 4px;
+    padding: 1rem 1.1rem;
+  }
+  .provider h4 { margin: 0 0 0.3rem; font-family: "Fraunces", Georgia, serif; font-weight: 600; color: var(--accent); font-size: 1rem; }
+  .provider .tag { display: inline-block; font-size: 0.72rem; color: var(--ink-faint); border: 1px solid var(--rule); padding: 0.1rem 0.4rem; border-radius: 3px; margin-left: 0.4rem; vertical-align: middle; }
+  .provider p { margin: 0.3rem 0 0; font-size: 0.88rem; color: var(--ink-dim); }
+
+  footer {
+    max-width: var(--max); margin: 0 auto; padding: 2.5rem 1.5rem;
+    border-top: 1px solid var(--rule);
+    font-size: 0.85rem; color: var(--ink-faint);
+  }
+  footer a { color: var(--ink-dim); }
+</style>
+</head>
+<body>
+
+<header class="top">
+  <div class="inner">
+    <img class="logo" src="logo.svg" alt="Diffusion Atlas">
+    <nav>
+      <a href="#quickstart">Quick start</a>
+      <a href="#api-keys">API keys</a>
+      <a href="#operations">Operations</a>
+      <a href="https://github.com/vector-lab-tools/diffusionatlas">GitHub</a>
+    </nav>
+  </div>
+</header>
+
+<main>
+
+<h1>Diffusion Atlas</h1>
+<p class="lede">Manifold geometry and benchmarking for diffusion models. One instrument, two views: an <b>Atlas</b> view that reads the shape of the latent space, and a <b>Bench</b> view that scores compositional fidelity. Both run on the same generated images.</p>
+
+<div class="meta">
+  <span><b>Author</b> David M. Berry, University of Sussex</span>
+  <span><b>Version</b> 0.4.0</span>
+  <span><b>Licence</b> GPL-3.0-or-later</span>
+  <span><b>Repository</b> <a href="https://github.com/vector-lab-tools/diffusionatlas">vector-lab-tools/diffusionatlas</a></span>
+</div>
+
+<p>Diffusion Atlas is a vector-native research instrument for studying how diffusion models generate images geometrically. Where <a href="https://github.com/vector-lab-tools/manifold-atlas">Manifold Atlas</a> reads the static manifold of a frozen embedding model, Diffusion Atlas reads the generative trajectory of a denoising model: the path through latent space that produces an image. Four operations run across hosted APIs (Replicate, Fal) and a local FastAPI backend (CUDA or Apple Silicon). Everything persists in the browser; nothing leaves your machine unless you call out to a hosted provider.</p>
+
+<div class="screenshot">
+  <img src="screenshots/hero.png" alt="Diffusion Atlas, main view" onerror="this.style.display='none'; this.nextElementSibling.style.display='block'">
+  <div style="display:none">Screenshot slot: drop <code>docs/screenshots/hero.png</code> (the main window, Atlas tab open, a trajectory rendered).</div>
+</div>
+
+<h2 id="what">What it does</h2>
+
+<table>
+  <tr><th>Operation</th><th>View</th><th>Backend</th><th>Core question</th></tr>
+  <tr><td>Denoise Trajectory</td><td>Atlas</td><td>Local only</td><td>What path does the model take through latent space?</td></tr>
+  <tr><td>Guidance Sweep</td><td>Atlas</td><td>Hosted or Local</td><td>How does CFG bend the trajectory? Where does mode collapse?</td></tr>
+  <tr><td>Latent Neighbourhood</td><td>Atlas</td><td>Hosted or Local</td><td>What does the local manifold look like around an anchor?</td></tr>
+  <tr><td>Compositional Bench</td><td>Bench</td><td>Hosted or Local</td><td>How well does the model bind, count, and place?</td></tr>
+</table>
+
+<h2 id="quickstart">Quick start</h2>
+
+<p>Diffusion Atlas is a Next.js frontend plus an optional Python backend. If you only want hosted operations (Sweep, Neighbourhood, Bench), the frontend alone is enough. For <b>Denoise Trajectory</b> and true latent-space neighbourhoods you need the local backend as well.</p>
+
+<h3>1. Clone and install the frontend</h3>
+
+<pre><code>git clone https://github.com/vector-lab-tools/diffusionatlas.git
+cd diffusionatlas
+npm install
+npm run dev</code></pre>
+
+<p>Open <a href="http://localhost:3000">http://localhost:3000</a>. The app loads with an empty state; click <b>Settings</b> (top right) to configure a provider.</p>
+
+<h3>2. (Optional) Install the local backend</h3>
+
+<p>Required for Denoise Trajectory. Needs a GPU (CUDA) or Apple Silicon (MPS) with at least 12 GB of available memory for SDXL-sized models.</p>
+
+<pre><code>cd backend
+python3 -m venv .venv
+source .venv/bin/activate         # Windows PowerShell: .venv\Scripts\Activate.ps1
+pip install --upgrade pip
+pip install -r requirements.txt
+uvicorn main:app --reload</code></pre>
+
+<p>The backend listens on <code>http://127.0.0.1:8000</code>. In Diffusion Atlas Settings, switch the backend to <b>Local</b> and confirm the URL. The first run of a given model downloads weights to <code>~/.cache/huggingface/</code> (a few GB for SDXL, more for SD3 / FLUX).</p>
+
+<div class="callout warn">
+<p><b>Loopback-only by design.</b> The local backend binds to <code>127.0.0.1</code>. Do not expose it to the public internet without replacing the self-identification header with real authentication — see the Security Model section in the <a href="https://github.com/vector-lab-tools/diffusionatlas#security-model">repository README</a>.</p>
+</div>
+
+<h2 id="api-keys">Getting API keys to work</h2>
+
+<p>Hosted providers return final images via API. Each needs its own key. The frontend stores keys in your browser only (<code>localStorage</code>); no key is ever sent anywhere except the provider it belongs to. Below are step-by-step instructions for the two wired providers.</p>
+
+<div class="provider-grid">
+  <div class="provider">
+    <h4>Replicate <span class="tag">wired</span></h4>
+    <p>Broad model selection (SDXL, SD3, FLUX). Aggressive rate limits on the free tier — expect retry banners.</p>
+  </div>
+  <div class="provider">
+    <h4>Fal <span class="tag">wired · recommended</span></h4>
+    <p>Order-of-magnitude more permissive rate limits than Replicate. Best for sweep- and bench-heavy work.</p>
+  </div>
+  <div class="provider">
+    <h4>HuggingFace <span class="tag">local only</span></h4>
+    <p>Needed only to download gated weights (SD3, FLUX-dev) for the local backend. Not entered in the app.</p>
+  </div>
+  <div class="provider">
+    <h4>Together · Stability <span class="tag">planned</span></h4>
+    <p>Provider stubs exist; wiring not complete.</p>
+  </div>
+</div>
+
+<h3>Replicate</h3>
+
+<ol>
+  <li>Create a free account at <a href="https://replicate.com/signin">replicate.com</a>. Sign in with GitHub if you have one.</li>
+  <li>Go to <a href="https://replicate.com/account/api-tokens">replicate.com/account/api-tokens</a>.</li>
+  <li>Click <b>Create token</b>, give it a name (e.g. <code>diffusion-atlas</code>), and copy the token. It starts with <code>r8_</code>.</li>
+  <li>In Diffusion Atlas, open <b>Settings</b>, choose <b>Hosted → Replicate</b>, and paste the token into the API key field. Save.</li>
+  <li>The model id field auto-fills with a sensible SDXL preset. You can swap in any Replicate model using its <code>owner/model[:version]</code> form.</li>
+</ol>
+
+<div class="callout">
+<p><b>Billing.</b> Replicate charges per generation and per second of GPU time. The free tier gives a small running credit; after that you need to add a payment method at <a href="https://replicate.com/account/billing">replicate.com/account/billing</a>. A single Guidance Sweep at five CFG values typically costs a few cents on SDXL.</p>
+</div>
+
+<h3>Fal</h3>
+
+<ol>
+  <li>Create an account at <a href="https://fal.ai/">fal.ai</a>.</li>
+  <li>Go to <a href="https://fal.ai/dashboard/keys">fal.ai/dashboard/keys</a>.</li>
+  <li>Click <b>Add key</b>, name it, copy the key. Fal keys have the form <code>&lt;key-id&gt;:&lt;key-secret&gt;</code>; paste the whole thing including the colon.</li>
+  <li>In Diffusion Atlas, open <b>Settings</b>, choose <b>Hosted → Fal</b>, and paste. Save.</li>
+  <li>The model id auto-fills with a Fal-flavoured preset (<code>fal-ai/&lt;model&gt;</code>). Overrides work the same way as Replicate.</li>
+</ol>
+
+<p>If a key is rejected, the first thing to check is that you copied the colon-joined pair as one string. A key-id without its secret produces a 401 that reads like a bad key.</p>
+
+<h3>HuggingFace (local backend only)</h3>
+
+<p>You need this only if you want to run Denoise Trajectory on a <i>gated</i> model (SD3 or FLUX-dev). SD1.5, SDXL, SDXL-turbo and FLUX-schnell are ungated and work without a HuggingFace account.</p>
+
+<ol>
+  <li>Create an account at <a href="https://huggingface.co/join">huggingface.co/join</a>.</li>
+  <li>Visit the gated model page, e.g. <a href="https://huggingface.co/stabilityai/stable-diffusion-3-medium-diffusers">stabilityai/stable-diffusion-3-medium-diffusers</a>, and accept the licence. For FLUX-dev visit <a href="https://huggingface.co/black-forest-labs/FLUX.1-dev">black-forest-labs/FLUX.1-dev</a>.</li>
+  <li>Create an access token at <a href="https://huggingface.co/settings/tokens">huggingface.co/settings/tokens</a>. A <b>read</b>-scope token is enough.</li>
+  <li>With the backend venv activated, run <code>huggingface-cli login</code> and paste the token. The token is stored in <code>~/.cache/huggingface/token</code>; you do not paste it into Diffusion Atlas.</li>
+  <li>Restart the backend. The next load of a gated model will succeed instead of 403.</li>
+</ol>
+
+<div class="callout warn">
+<p><b>If a download 403s</b>, the licence was not accepted on the model page under the account the token belongs to. Visit the model page while signed in, click <b>Agree and access repository</b>, then re-try.</p>
+</div>
+
+<h2 id="operations">Working through the operations</h2>
+
+<h3>Denoise Trajectory</h3>
+<p>Traces the iterative denoising path through latent space. The local backend streams per-step latents over NDJSON, with a thumbnail decoded through the VAE every Nth step. The client projects the latents to 3D via PCA (or UMAP, or a 35 mm Film view that renders every captured step as a contact sheet). Local backend required; hosted providers do not expose intermediate latents.</p>
+
+<div class="screenshot">
+  <img src="screenshots/trajectory.png" alt="Denoise Trajectory, 3D PCA view" onerror="this.style.display='none'; this.nextElementSibling.style.display='block'">
+  <div style="display:none">Screenshot slot: <code>docs/screenshots/trajectory.png</code> — the 3D PCA view with thumbnails along the curve.</div>
+</div>
+
+<h3>Guidance Sweep</h3>
+<p>Generates the same prompt and seed across a list of CFG values (default <code>1, 2.5, 4, 7.5, 12</code>). A drift curve above the grid plots normalised perceptual-hash distance from the baseline (CFG nearest 7.5), making the controllability surface, and the point where mode collapse begins, visible at a glance.</p>
+
+<div class="screenshot">
+  <img src="screenshots/sweep.png" alt="Guidance Sweep grid with drift curve" onerror="this.style.display='none'; this.nextElementSibling.style.display='block'">
+  <div style="display:none">Screenshot slot: <code>docs/screenshots/sweep.png</code> — a CFG sweep grid with the drift curve above it.</div>
+</div>
+
+<h3>Latent Neighbourhood</h3>
+<p>Perturbs a chosen latent and renders a grid of neighbours. Two modes: seed-jitter (hosted-friendly) and true latent-space sampling (local only). Supports cross-backend comparison.</p>
+
+<h3>Compositional Bench</h3>
+<p>GenEval-lite task pack: four categories (single object, two objects, counting, colour binding) by three prompts each. Each result is marked pass or fail manually, or auto-scored with CLIP (ViT-B/32) at a configurable cosine threshold.</p>
+
+<div class="screenshot">
+  <img src="screenshots/bench.png" alt="Compositional Bench results" onerror="this.style.display='none'; this.nextElementSibling.style.display='block'">
+  <div style="display:none">Screenshot slot: <code>docs/screenshots/bench.png</code> — the Bench grid with per-category scoring panel.</div>
+</div>
+
+<h2 id="troubleshooting">Troubleshooting</h2>
+
+<ul>
+  <li><b>Settings panel says "no provider configured".</b> Open Settings, pick a provider, paste a key. The panel will not let you leave until a provider is selected.</li>
+  <li><b>Replicate requests fail with 402.</b> The free credit has run out. Add a payment method at <a href="https://replicate.com/account/billing">replicate.com/account/billing</a>.</li>
+  <li><b>Fal 401 with a key that looks right.</b> Fal keys are <code>&lt;id&gt;:&lt;secret&gt;</code>. The colon-joined pair is the key; the id alone is not.</li>
+  <li><b>Backend unreachable.</b> The frontend expects the backend on <code>http://127.0.0.1:8000</code>. Confirm <a href="http://127.0.0.1:8000/health">http://127.0.0.1:8000/health</a> returns JSON. Common cause: the venv is not activated.</li>
+  <li><b>Local backend 403 on model download.</b> Gated model. Accept the licence on HuggingFace while signed in, run <code>huggingface-cli login</code> in the activated venv.</li>
+  <li><b>Out of memory on local backend.</b> Pick a smaller model (SD1.5 fits in 8 GB, SDXL wants 12+ GB, SD3 and FLUX want 24 GB). The backend logs the required and available memory on load.</li>
+  <li><b>Denoise Trajectory shows no thumbnails.</b> The <b>Preview every</b> field is zero. Set it to 1 (every step) or 5 (every fifth step).</li>
+</ul>
+
+<h2 id="licence">Licence</h2>
+
+<p>GNU General Public License, version 3 or later (GPL-3.0-or-later). All prior versions of Diffusion Atlas are retroactively relicensed under the same terms. See <a href="https://github.com/vector-lab-tools/diffusionatlas/blob/main/LICENSE">LICENSE</a> and <a href="https://github.com/vector-lab-tools/diffusionatlas/blob/main/COPYING">COPYING</a>.</p>
+
+</main>
+
+<footer>
+  Part of the <a href="https://vector-lab-tools.github.io">Vector Lab</a>. Sibling instruments:
+  <a href="https://github.com/vector-lab-tools/vectorscope">Vectorscope</a> ·
+  <a href="https://github.com/vector-lab-tools/manifold-atlas">Manifold Atlas</a> ·
+  <a href="https://github.com/vector-lab-tools/manifoldscope">Manifoldscope</a> ·
+  <a href="https://github.com/vector-lab-tools/theoryscope">Theoryscope</a> ·
+  <a href="https://github.com/vector-lab-tools/LLMbench">LLMbench</a>.
+</footer>
+
+</body>
+</html>
