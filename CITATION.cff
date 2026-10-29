@@ -1,0 +1,23 @@
+cff-version: 1.2.0
+message: "If you use Diffusion Atlas in your work, please cite it as below."
+title: "Diffusion Atlas: reading the generative trajectory of a denoising model"
+abstract: >-
+  Diffusion Atlas reads the generative trajectory of a denoising model, the path through
+  latent space that produces an image. Part of the Vector Lab family of research
+  instruments.
+type: software
+authors:
+  - family-names: Berry
+    given-names: David M.
+    affiliation: University of Sussex
+    orcid: "https://orcid.org/0000-0002-7737-5586"
+repository-code: "https://github.com/vector-lab-tools/diffusionatlas"
+license: GPL-3.0-or-later
+version: "0.4.1"
+date-released: 2026-10-29
+keywords:
+  - diffusion models
+  - latent space
+  - generative models
+  - interpretability
+  - vector space
