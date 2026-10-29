@@ -9,8 +9,6 @@
 
 **Manifold geometry and benchmarking for diffusion models.**
 
-[![DOI](https://zenodo.org/badge/DOI/10.5281/zenodo.23715023.svg)](https://doi.org/10.5281/zenodo.23715023)
-
 **Author:** David M. Berry
 **Institution:** University of Sussex
 **Version:** 0.4.1
@@ -276,6 +274,8 @@ The Atlas operations test specific claims of the framework. Denoise Trajectory m
 - Park, Y.-H. et al. (2023) 'Understanding the Latent Space of Diffusion Models through the Lens of Riemannian Geometry'. Available at: https://arxiv.org/abs/2307.12868
 
 ## Citation
+
+[![DOI](https://zenodo.org/badge/DOI/10.5281/zenodo.23715023.svg)](https://doi.org/10.5281/zenodo.23715023)
 
 If you use Diffusion Atlas in published research, please cite the archived release:
 
