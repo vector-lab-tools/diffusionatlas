@@ -14,7 +14,7 @@
 **Version:** 0.4.1
 **Date:** 27 October 2026
 **DOI:** [10.5281/zenodo.23715023](https://doi.org/10.5281/zenodo.23715023) (concept, always resolves to latest version)
-**Licence:** GNU General Public License, version 3 or later (GPL-3.0-or-later). See `LICENSE` and `COPYING`. All prior versions are retroactively relicensed under the same terms.
+**Licence:** GNU General Public License, version 3 or later (GPL-3.0-or-later). See `LICENSE`; the relicensing notice is in `NOTICE`. All prior versions are retroactively relicensed under the same terms.
 
 Diffusion Atlas is a vector-native research tool for studying how diffusion models generate images geometrically. Where [Manifold Atlas](https://github.com/vector-lab-tools/manifold-atlas) reads the static manifold of a frozen embedding model, Diffusion Atlas reads the generative trajectory of a denoising model: the path through latent space that produces an image. It unifies an **Atlas** view (interpretability and geometry) with a **Bench** view (scored compositional evaluation) in a single instrument.
 
@@ -298,4 +298,4 @@ Concept and Design by David M. Berry, implemented with Claude Code. Design syste
 
 ## Licence
 
-GNU General Public License, version 3 or later (GPL-3.0-or-later). See `LICENSE` and `COPYING`. All prior versions are retroactively relicensed under the same terms.
+GNU General Public License, version 3 or later (GPL-3.0-or-later). See `LICENSE`; the relicensing notice is in `NOTICE`. All prior versions are retroactively relicensed under the same terms.
