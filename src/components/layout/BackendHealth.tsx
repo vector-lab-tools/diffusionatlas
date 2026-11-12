@@ -4,6 +4,7 @@ import { useState } from "react";
 import { X } from "lucide-react";
 import { useSettings } from "@/context/DiffusionSettingsContext";
 import { useBackendHealth } from "@/context/BackendHealthContext";
+import { useEscape } from "@/lib/useEscape";
 
 /**
  * Renders the green/amber/red dot in the StatusBar that reflects the
@@ -16,6 +17,7 @@ export function BackendHealth() {
   const { settings } = useSettings();
   const { status, report, lastCheck, warmup, memoryWarning } = useBackendHealth();
   const [open, setOpen] = useState(false);
+  useEscape(open, () => setOpen(false));
 
   const dotColour =
     status === "ok"

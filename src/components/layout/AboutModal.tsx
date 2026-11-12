@@ -3,9 +3,11 @@
 import { useState } from "react";
 import { Info, X } from "lucide-react";
 import { VERSION, VERSION_DATE } from "@/lib/version";
+import { useEscape } from "@/lib/useEscape";
 
 export function AboutModal() {
   const [open, setOpen] = useState(false);
+  useEscape(open, () => setOpen(false));
 
   return (
     <>
@@ -18,11 +20,12 @@ export function AboutModal() {
       </button>
 
       {open && (
-        <>
-          <div className="fixed inset-0 bg-black/30 z-50" onClick={() => setOpen(false)} />
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/30 p-4" onClick={() => setOpen(false)}>
           <div
-            className="fixed top-1/2 left-1/2 -translate-x-1/2 -translate-y-1/2 z-50 w-[560px] max-w-[calc(100vw-2rem)] card-editorial shadow-editorial-lg animate-fade-in flex flex-col"
-            style={{ maxHeight: "calc(100vh - 2rem)" }}
+            role="dialog"
+            aria-modal="true"
+            className="w-[560px] max-w-full max-h-[90vh] card-editorial shadow-editorial-lg animate-fade-in flex flex-col"
+            onClick={(e) => e.stopPropagation()}
           >
             <div className="px-6 pt-6 pb-4 flex items-start justify-between flex-shrink-0">
               <div className="flex items-start gap-3">
@@ -68,8 +71,21 @@ export function AboutModal() {
                   <span className="text-muted-foreground">Design system</span>
                   <span className="font-medium">CCS-WB Editorial</span>
 
+                  <span className="text-muted-foreground">Supported by</span>
+                  <span className="font-medium">Otto Mønsted Visiting Professorship, Copenhagen</span>
+
                   <span className="text-muted-foreground">Licence</span>
-                  <span className="font-medium">MIT</span>
+                  <span className="font-medium">GPL-3.0-or-later</span>
+
+                  <span className="text-muted-foreground">DOI</span>
+                  <a
+                    href="https://doi.org/10.5281/zenodo.23715023"
+                    target="_blank"
+                    rel="noopener noreferrer"
+                    className="font-medium text-burgundy underline underline-offset-2"
+                  >
+                    10.5281/zenodo.23715023
+                  </a>
                 </div>
               </div>
 
@@ -139,7 +155,15 @@ export function AboutModal() {
                 </div>
               </div>
 
-              <div className="px-6 py-4 border-t border-parchment flex items-center gap-4 font-sans text-body-sm">
+              <div className="px-6 py-4 border-t border-parchment flex flex-wrap items-center gap-4 font-sans text-body-sm">
+                <a
+                  href="https://vector-lab-tools.github.io/diffusionatlas/#faq"
+                  target="_blank"
+                  rel="noopener noreferrer"
+                  className="text-burgundy underline underline-offset-2 hover:text-burgundy-900"
+                >
+                  Guide and FAQ
+                </a>
                 <a
                   href="https://github.com/vector-lab-tools/diffusionatlas"
                   target="_blank"
@@ -167,7 +191,7 @@ export function AboutModal() {
               </div>
             </div>
           </div>
-        </>
+        </div>
       )}
     </>
   );

@@ -3,6 +3,7 @@
 import { useEffect, useState, type ReactNode } from "react";
 import { X } from "lucide-react";
 import { computeImageStats, type ImageStats } from "@/lib/image/stats";
+import { useEscape } from "@/lib/useEscape";
 
 export interface CameraRollEntry {
   src: string;
@@ -91,6 +92,7 @@ interface FrameModalProps {
 }
 
 export function FrameModal({ entry, onClose, onPrev, onNext, index, total }: FrameModalProps) {
+  useEscape(true, onClose);
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center bg-ink/60 p-4" onClick={onClose}>
       <div

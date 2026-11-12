@@ -1,6 +1,7 @@
 "use client";
 
 import { useCallback, useEffect, useRef, useState } from "react";
+import { useEscape } from "@/lib/useEscape";
 import { UMAP } from "umap-js";
 import { X, Plus, Lock, Unlock, Square, Search, Play } from "lucide-react";
 import { useSettings, effectiveSteps } from "@/context/DiffusionSettingsContext";
@@ -1357,6 +1358,7 @@ function StepScrubberModal({
   stepStats: Array<Omit<StepEvent, "event" | "shape" | "latentB64" | "previewDataUrl">>;
   cfg: number;
 }) {
+  useEscape(true, onClose);
   const idx = Math.max(0, Math.min(captured - 1, selected));
   const preview = previews[idx];
   const stat = stepStats[idx];

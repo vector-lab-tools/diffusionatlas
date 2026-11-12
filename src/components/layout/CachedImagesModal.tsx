@@ -3,6 +3,7 @@
 import { useEffect, useState } from "react";
 import { X, Trash2 } from "lucide-react";
 import { useImageBlobCache } from "@/context/ImageBlobCacheContext";
+import { useEscape } from "@/lib/useEscape";
 import { CameraRoll, type CameraRollEntry } from "@/components/shared/CameraRoll";
 
 interface CachedImagesModalProps {
@@ -19,6 +20,7 @@ interface CachedImagesModalProps {
  */
 export function CachedImagesModal({ open, onClose }: CachedImagesModalProps) {
   const { list, count, approximateBytes, clear } = useImageBlobCache();
+  useEscape(open, onClose);
   const [entries, setEntries] = useState<CameraRollEntry[]>([]);
   const [loading, setLoading] = useState(true);
 

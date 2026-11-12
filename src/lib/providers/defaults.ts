@@ -42,7 +42,8 @@ export const RENAMED_MODELS: Record<string, string> = {
   "runwayml/stable-diffusion-v1-5": "stable-diffusion-v1-5/stable-diffusion-v1-5",
 };
 
-export const HOSTED_PROVIDERS: ProviderId[] = ["replicate", "fal", "together", "stability"];
+// Only providers registered in dispatcher.ts; together and stability are typed but not wired.
+export const HOSTED_PROVIDERS: ProviderId[] = ["replicate", "fal"];
 export const ALL_PROVIDERS: ProviderId[] = [...HOSTED_PROVIDERS, "local"];
 
 /** Pretty label for UI. */

@@ -4,7 +4,7 @@ import { Settings, Moon, Sun } from "lucide-react";
 import { useSettings } from "@/context/DiffusionSettingsContext";
 import { getGroupLabel, type TabId } from "./TabNav";
 import { AboutModal } from "./AboutModal";
-import { HelpDropdown } from "./HelpDropdown";
+import { HelpModal } from "./HelpModal";
 
 interface HeaderProps {
   activeTab?: TabId;
@@ -66,7 +66,7 @@ export function Header({ activeTab }: HeaderProps) {
       </div>
       <div className="flex items-center gap-2">
         <AboutModal />
-        <HelpDropdown />
+        <HelpModal />
         <button
           onClick={toggleDarkMode}
           className="btn-editorial-ghost px-3 py-2"
