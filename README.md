@@ -1,5 +1,5 @@
 > Part of the [Vector Lab](https://github.com/vector-lab-tools). Vector methods for vector theory.
-> [Overview and map](https://vector-lab-tools.github.io) · [Org profile](https://github.com/vector-lab-tools)
+> [Overview and map](https://vector-lab-tools.github.io) · [FAQ](https://vector-lab-tools.github.io/faq.html) · [Org profile](https://github.com/vector-lab-tools)
 >
 > **Tier:** comparative model tool. **Object:** generative trajectories of diffusion models.
 >
@@ -157,6 +157,8 @@ The backend listens on `http://localhost:8000`. In Diffusion Atlas Settings, swi
 3. For hosted: select a provider and paste your API key
 4. For local: confirm the FastAPI URL and select a model
 5. Close settings and start generating
+
+Step-by-step key setup for Replicate, Fal and Hugging Face is on the [Diffusion Atlas docs page](https://vector-lab-tools.github.io/diffusionatlas/#api-keys). For API keys, local routes and common problems across all the Vector Lab tools, see the [Vector Lab FAQ](https://vector-lab-tools.github.io/faq.html).
 
 ### Adding or Removing Models
 
