@@ -124,6 +124,7 @@
       <a href="#quickstart">Quick start</a>
       <a href="#api-keys">API keys</a>
       <a href="#operations">Operations</a>
+      <a href="#faq">FAQ</a>
       <a href="https://github.com/vector-lab-tools/diffusionatlas">GitHub</a>
     </nav>
   </div>
@@ -300,6 +301,33 @@ uvicorn main:app --reload</code></pre>
 </ul>
 
 <p>If it is not on this page, <a href="https://github.com/vector-lab-tools/diffusionatlas/issues">open an issue on the tool's repository</a> to report the problem. If you have a fix, a pull request is welcome.</p>
+
+<h2 id="faq">FAQ</h2>
+
+<h3>When was Diffusion Atlas first created?</h3>
+<p>The first commit, an initial scaffold tagged v0.1, is dated 26 April 2026. Concept and design are by David M. Berry (University of Sussex); the code was written with Claude Code.</p>
+
+<h3>How has it developed?</h3>
+<ul>
+  <li><b>v0.1 (26–27 April 2026).</b> Hosted generation through Replicate, a Guidance Sweep with rate-limit retry, Latent Neighbourhood, Compositional Bench with manual scoring, and a Library of saved runs.</li>
+  <li><b>v0.2 (27 April 2026).</b> The local FastAPI backend, Denoise Trajectory streamed step by step over NDJSON and drawn as a 3D PCA path, CLIP auto-scoring for the Bench, Fal as a second hosted provider, and a UMAP projection option.</li>
+  <li><b>v0.3 (27–28 April 2026).</b> Cross-backend comparison in Sweep, Neighbourhood and Bench; Deep Dive panels; the film contact-sheet view; temporary and locked layers; stop buttons on every operation; memory fixes for 24 GB Apple Silicon machines; scheduler changes that stopped black images at CFG 7.5; and a self-identification header on the local backend.</li>
+  <li><b>v0.4.0 (9 August 2026).</b> Relicensed from MIT to GPL-3.0-or-later, with all earlier versions included.</li>
+  <li><b>v0.4.1 (27 October 2026).</b> The first GitHub release, archived on Zenodo with a DOI.</li>
+  <li><b>Since v0.4.1.</b> This documentation site, links to the Vector Lab FAQ, and model suggestions in Settings alongside the free-text Model field, with the Stable Diffusion 1.5 id updated after it moved on Hugging Face.</li>
+</ul>
+<p>The full history is in the <a href="https://github.com/vector-lab-tools/diffusionatlas/commits/main">commit log</a> and the Roadmap section of the <a href="https://github.com/vector-lab-tools/diffusionatlas#roadmap">README</a>.</p>
+
+<h3>Where is the code?</h3>
+<ul>
+  <li>Repository: <a href="https://github.com/vector-lab-tools/diffusionatlas">github.com/vector-lab-tools/diffusionatlas</a></li>
+  <li>Releases: <a href="https://github.com/vector-lab-tools/diffusionatlas/releases">github.com/vector-lab-tools/diffusionatlas/releases</a></li>
+  <li>Issues: <a href="https://github.com/vector-lab-tools/diffusionatlas/issues">github.com/vector-lab-tools/diffusionatlas/issues</a></li>
+  <li>Archived releases: <a href="https://doi.org/10.5281/zenodo.23715023">Zenodo, DOI 10.5281/zenodo.23715023</a></li>
+</ul>
+
+<h3>Where are the questions common to all Vector Lab tools?</h3>
+<p>API keys, free local routes and common problems across the Vector Lab tools are covered in the <a href="https://vector-lab-tools.github.io/faq.html">Vector Lab FAQ</a>.</p>
 
 <h2 id="citation">Citation</h2>
 
