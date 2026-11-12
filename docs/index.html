@@ -236,15 +236,19 @@ uvicorn main:app --reload</code></pre>
   <li>The model id auto-fills with a Fal-flavoured preset (<code>fal-ai/&lt;model&gt;</code>). Overrides work the same way as Replicate.</li>
 </ol>
 
+<h3>Choosing a model</h3>
+
+<p>The <b>Model</b> field in Settings offers suggestions for the selected provider, but it is free text: any model id from the provider's catalogue can be typed in and is used as entered. If a suggested model is withdrawn or renamed, type the current id from the provider's model page (Replicate: <code>owner/model</code>; Fal: <code>fal-ai/&lt;model&gt;</code>; local: a Hugging Face id such as <code>stabilityai/sdxl-turbo</code>). <b>Reset to default</b> restores the provider's starting model.</p>
+
 <p>If a key is rejected, the first thing to check is that you copied the colon-joined pair as one string. A key-id without its secret produces a 401 that reads like a bad key.</p>
 
 <h3>HuggingFace (local backend only)</h3>
 
-<p>You need this only if you want to run Denoise Trajectory on a <i>gated</i> model (SD3 or FLUX-dev). SD1.5, SDXL, SDXL-turbo and FLUX-schnell are ungated and work without a HuggingFace account.</p>
+<p>You need this only if you want to run the local backend on a <i>gated</i> model (SD 3 / 3.5, FLUX-schnell or FLUX-dev). SD 1.5 (<code>stable-diffusion-v1-5/stable-diffusion-v1-5</code>), SDXL and SDXL-turbo are ungated and work without a HuggingFace account.</p>
 
 <ol>
   <li>Create an account at <a href="https://huggingface.co/join">huggingface.co/join</a>.</li>
-  <li>Visit the gated model page, e.g. <a href="https://huggingface.co/stabilityai/stable-diffusion-3-medium-diffusers">stabilityai/stable-diffusion-3-medium-diffusers</a>, and accept the licence. For FLUX-dev visit <a href="https://huggingface.co/black-forest-labs/FLUX.1-dev">black-forest-labs/FLUX.1-dev</a>.</li>
+  <li>Visit the gated model page, e.g. <a href="https://huggingface.co/stabilityai/stable-diffusion-3.5-medium">stabilityai/stable-diffusion-3.5-medium</a>, and accept the licence. For FLUX visit <a href="https://huggingface.co/black-forest-labs/FLUX.1-schnell">black-forest-labs/FLUX.1-schnell</a> or <a href="https://huggingface.co/black-forest-labs/FLUX.1-dev">black-forest-labs/FLUX.1-dev</a>.</li>
   <li>Create an access token at <a href="https://huggingface.co/settings/tokens">huggingface.co/settings/tokens</a>. A <b>read</b>-scope token is enough.</li>
   <li>With the backend venv activated, run <code>huggingface-cli login</code> and paste the token. The token is stored in <code>~/.cache/huggingface/token</code>; you do not paste it into Diffusion Atlas.</li>
   <li>Restart the backend. The next load of a gated model will succeed instead of 403.</li>

@@ -11,7 +11,35 @@ export const PROVIDER_DEFAULT_MODEL: Record<ProviderId, string> = {
   fal: "fal-ai/flux/schnell",
   together: "black-forest-labs/FLUX.1-schnell-Free",
   stability: "stable-diffusion-xl-1024-v1-0",
-  local: "runwayml/stable-diffusion-v1-5",
+  local: "stable-diffusion-v1-5/stable-diffusion-v1-5",
+};
+
+// Suggestions only: the Model field stays free text so any id from the
+// provider's catalogue works when these go stale. Checked 2026-11-12.
+export const PROVIDER_SUGGESTED_MODELS: Record<ProviderId, string[]> = {
+  replicate: [
+    "black-forest-labs/flux-schnell",
+    "black-forest-labs/flux-dev",
+    "black-forest-labs/flux-2-dev",
+    "stability-ai/stable-diffusion-3.5-medium",
+    "bytedance/sdxl-lightning-4step",
+  ],
+  fal: ["fal-ai/flux/schnell", "fal-ai/flux/dev", "fal-ai/flux-2", "fal-ai/fast-sdxl"],
+  together: ["black-forest-labs/FLUX.1-schnell-Free"],
+  stability: ["stable-diffusion-xl-1024-v1-0"],
+  local: [
+    "stable-diffusion-v1-5/stable-diffusion-v1-5",
+    "stabilityai/sdxl-turbo",
+    "stabilityai/stable-diffusion-xl-base-1.0",
+    "stabilityai/stable-diffusion-3.5-medium",
+    "black-forest-labs/FLUX.1-schnell",
+    "black-forest-labs/FLUX.1-dev",
+  ],
+};
+
+// Ids that moved; saved settings are rewritten on load.
+export const RENAMED_MODELS: Record<string, string> = {
+  "runwayml/stable-diffusion-v1-5": "stable-diffusion-v1-5/stable-diffusion-v1-5",
 };
 
 export const HOSTED_PROVIDERS: ProviderId[] = ["replicate", "fal", "together", "stability"];

@@ -2,6 +2,7 @@
 
 import { createContext, useContext, useEffect, useState, type ReactNode } from "react";
 import { type Backend, type ProviderId } from "@/lib/providers/types";
+import { RENAMED_MODELS } from "@/lib/providers/defaults";
 
 export type { Backend, ProviderId };
 
@@ -72,6 +73,9 @@ export function DiffusionSettingsProvider({ children }: { children: ReactNode })
       const ARCHIVED = new Set(["stability-ai/sdxl", "stability-ai/stable-diffusion"]);
       if (stored.modelId && ARCHIVED.has(stored.modelId)) {
         stored.modelId = DEFAULT_SETTINGS.modelId;
+      }
+      if (stored.modelId && RENAMED_MODELS[stored.modelId]) {
+        stored.modelId = RENAMED_MODELS[stored.modelId];
       }
       setSettingsState({ ...DEFAULT_SETTINGS, ...stored });
     } catch {}

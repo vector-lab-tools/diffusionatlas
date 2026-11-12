@@ -30,7 +30,7 @@ from pydantic import BaseModel, Field
 
 
 class TrajectoryRequest(BaseModel):
-    modelId: str = "runwayml/stable-diffusion-v1-5"
+    modelId: str = "stable-diffusion-v1-5/stable-diffusion-v1-5"
     prompt: str
     negativePrompt: str | None = None
     seed: int = 0

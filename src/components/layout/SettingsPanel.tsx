@@ -5,7 +5,7 @@ import { X, Eye, EyeOff } from "lucide-react";
 import { useSettings, type Backend, type ProviderId } from "@/context/DiffusionSettingsContext";
 import { useLatentCache } from "@/context/LatentCacheContext";
 import { useImageBlobCache } from "@/context/ImageBlobCacheContext";
-import { HOSTED_PROVIDERS, PROVIDER_DEFAULT_MODEL } from "@/lib/providers/defaults";
+import { HOSTED_PROVIDERS, PROVIDER_DEFAULT_MODEL, PROVIDER_SUGGESTED_MODELS } from "@/lib/providers/defaults";
 
 export function SettingsPanel() {
   const { settings, setSettings, settingsOpen, setSettingsOpen } = useSettings();
@@ -190,11 +190,29 @@ export function SettingsPanel() {
           </h3>
           <input
             type="text"
+            list="model-suggestions"
             value={settings.modelId}
-            onChange={(e) => setSettings({ ...settings, modelId: e.target.value })}
+            onChange={(e) => setSettings({ ...settings, modelId: e.target.value.trim() })}
             className="input-editorial"
             placeholder="model id"
+            spellCheck={false}
+            autoComplete="off"
           />
+          <datalist id="model-suggestions">
+            {PROVIDER_SUGGESTED_MODELS[settings.providerId].map((m) => (
+              <option key={m} value={m} />
+            ))}
+          </datalist>
+          <p className="mt-1 font-sans text-caption text-muted-foreground italic">
+            Pick a suggestion or type any model id from the provider&apos;s catalogue
+            {settings.providerId === "local" ? " (a Hugging Face id)" : ""}. Suggestions can go out of date; a typed id is used as entered.
+          </p>
+          <button
+            onClick={() => setSettings({ ...settings, modelId: PROVIDER_DEFAULT_MODEL[settings.providerId] })}
+            className="btn-editorial-ghost px-3 py-1 mt-2 font-sans text-caption"
+          >
+            Reset to default
+          </button>
         </section>
 
         <section className="mb-6">

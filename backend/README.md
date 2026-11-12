@@ -43,11 +43,14 @@ Then in Diffusion Atlas (http://localhost:3000), open Settings → switch Backen
 
 Models are pulled by Hugging Face id at first request. Suggested registry (subject to user override):
 
-- `runwayml/stable-diffusion-v1-5` — ~4 GB, the safe default
+- `stable-diffusion-v1-5/stable-diffusion-v1-5` — ~4 GB, the safe default (the old `runwayml/` id now only redirects here)
+- `stabilityai/sdxl-turbo` — ungated, distilled (1–4 steps)
 - `stabilityai/stable-diffusion-xl-base-1.0` — ~10 GB, needs slicing on 24 GB MPS
-- `stabilityai/stable-diffusion-3-medium-diffusers` — license-gated
-- `black-forest-labs/FLUX.1-schnell` — license-gated, distilled (4 steps)
-- `black-forest-labs/FLUX.1-dev` — license-gated, ~24 GB
+- `stabilityai/stable-diffusion-3.5-medium` — licence-gated
+- `black-forest-labs/FLUX.1-schnell` — licence-gated, distilled (4 steps)
+- `black-forest-labs/FLUX.1-dev` — licence-gated, ~24 GB
+
+Any other diffusers-compatible Hugging Face id can be typed into the Model field in Settings. The list above was checked on 12 November 2026.
 
 The session keeps one pipeline in memory at a time. Switching `modelId` between requests triggers a swap.
 

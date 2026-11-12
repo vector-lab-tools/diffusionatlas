@@ -25,7 +25,7 @@ from pydantic import BaseModel
 
 
 class WarmupRequest(BaseModel):
-    modelId: str = "runwayml/stable-diffusion-v1-5"
+    modelId: str = "stable-diffusion-v1-5/stable-diffusion-v1-5"
     overrideMemoryCheck: bool = False
 
 
