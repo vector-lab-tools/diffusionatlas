@@ -160,6 +160,8 @@ The backend listens on `http://localhost:8000`. In Diffusion Atlas Settings, swi
 
 Step-by-step key setup for Replicate, Fal and Hugging Face is on the [Diffusion Atlas docs page](https://vector-lab-tools.github.io/diffusionatlas/#api-keys). For API keys, local routes and common problems across all the Vector Lab tools, see the [Vector Lab FAQ](https://vector-lab-tools.github.io/faq.html).
 
+If it is not on this page, [open an issue on the tool's repository](https://github.com/vector-lab-tools/diffusionatlas/issues) to report the problem. If you have a fix, a pull request is welcome.
+
 ### Adding or Removing Models
 
 Model lists are defined in markdown under `public/models/`, one file per provider (`replicate.md`, `fal.md`, `together.md`, `stability.md`, `local.md`). Add a model with one line:
