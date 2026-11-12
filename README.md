@@ -300,6 +300,8 @@ The concept DOI above always resolves to the latest archived version. For a spec
 
 Concept and Design by David M. Berry, implemented with Claude Code. Design system adapted from the [CCS Workbench](https://github.com/dmberry/ccs-wb).
 
+Diffusion Atlas was created in 2026 in Copenhagen, Denmark, as part of an Otto Mønsted Visiting Professorship. We thank the Otto Mønsted Foundation for its support.
+
 ## Licence
 
 GNU General Public License, version 3 or later (GPL-3.0-or-later). See `LICENSE`; the relicensing notice is in `NOTICE`. All prior versions are retroactively relicensed under the same terms.
