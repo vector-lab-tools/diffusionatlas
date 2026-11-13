@@ -11,6 +11,7 @@
 import jsPDF from "jspdf";
 import autoTable from "jspdf-autotable";
 import { VERSION } from "@/lib/version";
+import { CITE_LINE } from "@/lib/cite";
 
 export interface PdfMeta {
   /** Operation name in the page header. */
@@ -171,6 +172,13 @@ function drawHeader(doc: jsPDF, meta: PdfMeta): number {
     }
     y += 2;
   }
+
+  doc.setFont("helvetica", "italic");
+  doc.setFontSize(7.5);
+  doc.setTextColor(100);
+  const citeLines: string[] = doc.splitTextToSize(CITE_LINE, PAGE_W - 2 * MARGIN);
+  doc.text(citeLines, MARGIN, y);
+  y += citeLines.length * 3.4 + 1.5;
 
   // Thin rule under header
   doc.setDrawColor(220);

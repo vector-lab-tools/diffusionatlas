@@ -48,7 +48,34 @@
     max-width: var(--max); margin: 0 auto;
     display: flex; align-items: center; justify-content: space-between; gap: 1rem;
   }
-  header.top img.logo { height: 32px; }
+  header.top {
+    position: sticky; top: 0; z-index: 10;
+    background: rgba(15, 16, 18, 0.85);
+    -webkit-backdrop-filter: blur(8px); backdrop-filter: blur(8px);
+  }
+  header.top .brand { display: flex; flex-direction: column; gap: 0.15rem; }
+  header.top a.crumb {
+    font-family: "JetBrains Mono", ui-monospace, monospace;
+    font-size: 0.68rem; letter-spacing: 0.08em; text-transform: uppercase;
+    color: var(--ink-faint); border-bottom: none;
+  }
+  header.top a.crumb:hover { color: var(--accent); }
+  header.top a.wordmark {
+    display: flex; align-items: center; gap: 0.5rem; white-space: nowrap;
+    border-bottom: none; color: var(--ink);
+    font-family: "Fraunces", Georgia, serif; font-weight: 600; font-size: 1.1rem;
+  }
+  header.top img.logo { height: 28px; }
+  .table-wrap { overflow-x: auto; }
+  @media (max-width: 640px) {
+    header.top .inner { flex-wrap: wrap; row-gap: 0.6rem; }
+    header.top nav { flex-wrap: wrap; gap: 0.3rem 1rem; font-size: 0.82rem; }
+  }
+  .eyebrow {
+    font-family: "JetBrains Mono", ui-monospace, monospace;
+    font-size: 0.75rem; letter-spacing: 0.08em; text-transform: uppercase;
+    color: var(--ink-faint); margin: 0 0 0.6rem;
+  }
   header.top nav { display: flex; gap: 1.3rem; font-size: 0.9rem; }
   header.top nav a { color: var(--ink-dim); border-bottom: none; }
   header.top nav a:hover { color: var(--ink); }
@@ -115,11 +142,14 @@
   footer a { color: var(--ink-dim); }
 </style>
 </head>
-<body>
+<body id="top">
 
 <header class="top">
   <div class="inner">
-    <img class="logo" src="logo.svg" alt="Diffusion Atlas">
+    <div class="brand">
+      <a class="crumb" href="https://vector-lab-tools.github.io/">&larr; Vector Lab</a>
+      <a class="wordmark" href="#top"><img class="logo" src="logo.svg" alt=""> <span>Diffusion Atlas</span></a>
+    </div>
     <nav>
       <a href="#quickstart">Quick start</a>
       <a href="#api-keys">API keys</a>
@@ -132,6 +162,7 @@
 
 <main>
 
+<p class="eyebrow"><a href="https://vector-lab-tools.github.io/">Vector Lab</a> &middot; a research instrument</p>
 <h1>Diffusion Atlas</h1>
 <p class="lede">Manifold geometry and benchmarking for diffusion models. One instrument, two views: an <b>Atlas</b> view that reads the shape of the latent space, and a <b>Bench</b> view that scores compositional fidelity. Both run on the same generated images.</p>
 
@@ -152,13 +183,13 @@
 
 <h2 id="what">What it does</h2>
 
-<table>
+<div class="table-wrap"><table>
   <tr><th>Operation</th><th>View</th><th>Backend</th><th>Core question</th></tr>
   <tr><td>Denoise Trajectory</td><td>Atlas</td><td>Local only</td><td>What path does the model take through latent space?</td></tr>
   <tr><td>Guidance Sweep</td><td>Atlas</td><td>Hosted or Local</td><td>How does CFG bend the trajectory? Where does mode collapse?</td></tr>
   <tr><td>Latent Neighbourhood</td><td>Atlas</td><td>Hosted or Local</td><td>What does the local manifold look like around an anchor?</td></tr>
   <tr><td>Compositional Bench</td><td>Bench</td><td>Hosted or Local</td><td>How well does the model bind, count, and place?</td></tr>
-</table>
+</table></div>
 
 <h2 id="quickstart">Quick start</h2>
 
@@ -305,7 +336,8 @@ uvicorn main:app --reload</code></pre>
 <h2 id="faq">FAQ</h2>
 
 <h3>When was Diffusion Atlas first created?</h3>
-<p>Diffusion Atlas was created in 2026 in Copenhagen, Denmark, as part of an Otto Mønsted Visiting Professorship. The first commit, an initial scaffold tagged v0.1, is dated 26 April 2026. Concept and design are by David M. Berry (University of Sussex); the code was written with Claude Code. We thank the Otto Mønsted Foundation for its support.</p>
+<p>The first commit, an initial scaffold tagged v0.1, is dated 26 April 2026. Concept and design are by David M. Berry (University of Sussex); the code was written with Claude Code.</p>
+<p>Built at Copenhagen Business School, Denmark, during an Otto M&oslash;nsted Visiting Professorship in 2026. The support of the Otto M&oslash;nsted Fond (grant 25-12-1849) is gratefully acknowledged.</p>
 
 <h3>How has it developed?</h3>
 <ul>
@@ -355,6 +387,9 @@ uvicorn main:app --reload</code></pre>
   <a href="https://github.com/vector-lab-tools/manifoldscope">Manifoldscope</a> ·
   <a href="https://github.com/vector-lab-tools/theoryscope">Theoryscope</a> ·
   <a href="https://github.com/vector-lab-tools/LLMbench">LLMbench</a>.
+  <div style="margin-top: 0.8rem;">
+    Built at Copenhagen Business School, Denmark, during an Otto M&oslash;nsted Visiting Professorship in 2026. The support of the Otto M&oslash;nsted Fond (grant 25-12-1849) is gratefully acknowledged.
+  </div>
   <div style="margin-top: 0.8rem; font-size: 0.72rem; color: var(--ink-faint);">
     DOI <a href="https://doi.org/10.5281/zenodo.23715023">10.5281/zenodo.23715023</a> (concept, resolves to latest version)
   </div>

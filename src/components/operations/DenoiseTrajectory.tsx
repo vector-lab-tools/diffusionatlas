@@ -2,6 +2,7 @@
 
 import { useCallback, useEffect, useRef, useState } from "react";
 import { useEscape } from "@/lib/useEscape";
+import { CITE_LINE } from "@/lib/cite";
 import { UMAP } from "umap-js";
 import { X, Plus, Lock, Unlock, Square, Search, Play } from "lucide-react";
 import { useSettings, effectiveSteps } from "@/context/DiffusionSettingsContext";
@@ -1631,6 +1632,21 @@ function StepScrubberModal({
  * horizontally, with per-step scalars under each frame. Sprockets and
  * background styled to evoke a contact sheet rather than a UI panel.
  */
+function wrapWords(text: string, maxChars: number): string[] {
+  const rows: string[] = [];
+  let row = "";
+  for (const word of text.split(" ")) {
+    if (row && row.length + 1 + word.length > maxChars) {
+      rows.push(row);
+      row = word;
+    } else {
+      row = row ? `${row} ${word}` : word;
+    }
+  }
+  if (row) rows.push(row);
+  return rows;
+}
+
 function buildFilmReelSvg(
   previews: Array<string | null>,
   latents: Float32Array[],
@@ -1651,10 +1667,13 @@ function buildFilmReelSvg(
   const SPROCKET_W = 14;
   const SPROCKET_GAP = 14;
   const TITLE_H = 30;
-  const FOOTER_H = 22;
+  const CITE_LINE_H = 11;
 
   const innerH = SPROCKET_H + 8 + FRAME_H + 6 + CAPTION_H + 8 + SPROCKET_H;
   const W = PAD_X * 2 + latents.length * (FRAME_W + GAP) - GAP;
+  // ~4.9 px per character for 8 px monospace.
+  const citeRows = wrapWords(CITE_LINE, Math.max(40, Math.floor((W - PAD_X * 2) / 4.9)));
+  const FOOTER_H = 22 + citeRows.length * CITE_LINE_H + 4;
   const H = TITLE_H + innerH + FOOTER_H;
 
   const frames = latents
@@ -1724,9 +1743,16 @@ function buildFilmReelSvg(
     `<text x="${PAD_X}" y="${TITLE_H - 10}" fill="#a36b3a" font-family="ui-monospace, monospace" font-size="11" letter-spacing="3">DIFFUSION ATLAS · CONTACT SHEET</text>` +
     `<text x="${W - PAD_X}" y="${TITLE_H - 10}" fill="#888" font-family="ui-monospace, monospace" font-size="10" text-anchor="end">${escXml(modelId)} · seed ${escXml(seed)} · ${latents.length} frames</text>`;
 
+  const footerY = TITLE_H + innerH + 16;
   const footer =
-    `<text x="${PAD_X}" y="${H - 6}" fill="#666" font-family="ui-monospace, monospace" font-size="9">${escXml(prompt)}</text>` +
-    `<text x="${W - PAD_X}" y="${H - 6}" fill="#666" font-family="ui-monospace, monospace" font-size="9" text-anchor="end">vector-lab-tools.github.io</text>`;
+    `<text x="${PAD_X}" y="${footerY}" fill="#666" font-family="ui-monospace, monospace" font-size="9">${escXml(prompt)}</text>` +
+    `<text x="${W - PAD_X}" y="${footerY}" fill="#666" font-family="ui-monospace, monospace" font-size="9" text-anchor="end">vector-lab-tools.github.io</text>` +
+    citeRows
+      .map(
+        (row, i) =>
+          `<text x="${PAD_X}" y="${footerY + 14 + i * CITE_LINE_H}" fill="#777" font-family="ui-monospace, monospace" font-size="8">${escXml(row)}</text>`,
+      )
+      .join("");
 
   return `<?xml version="1.0" encoding="UTF-8"?>
 <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 ${W} ${H}" width="${W}" height="${H}" font-family="sans-serif">

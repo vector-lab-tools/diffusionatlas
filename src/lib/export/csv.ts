@@ -3,6 +3,8 @@
  * per RFC 4180; escapes inner quotes by doubling. Browser-only download.
  */
 
+import { CITE_LINE } from "@/lib/cite";
+
 function escape(field: string | number | null | undefined): string {
   if (field === null || field === undefined) return "";
   const s = String(field);
@@ -12,8 +14,9 @@ function escape(field: string | number | null | undefined): string {
   return s;
 }
 
+// The leading "#" line is the citation; pandas reads past it with comment="#".
 export function rowsToCsv(headers: string[], rows: Array<Array<string | number | null | undefined>>): string {
-  const lines = [headers.map(escape).join(",")];
+  const lines = [`# ${CITE_LINE}`, headers.map(escape).join(",")];
   for (const row of rows) lines.push(row.map(escape).join(","));
   return lines.join("\n") + "\n";
 }

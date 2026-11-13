@@ -4,6 +4,7 @@ import { useState } from "react";
 import { Info, X } from "lucide-react";
 import { VERSION, VERSION_DATE } from "@/lib/version";
 import { useEscape } from "@/lib/useEscape";
+import { CITE_LINE, CONCEPT_DOI } from "@/lib/cite";
 
 export function AboutModal() {
   const [open, setOpen] = useState(false);
@@ -71,22 +72,27 @@ export function AboutModal() {
                   <span className="text-muted-foreground">Design system</span>
                   <span className="font-medium">CCS-WB Editorial</span>
 
-                  <span className="text-muted-foreground">Supported by</span>
-                  <span className="font-medium">Otto Mønsted Visiting Professorship, Copenhagen</span>
-
                   <span className="text-muted-foreground">Licence</span>
                   <span className="font-medium">GPL-3.0-or-later</span>
 
                   <span className="text-muted-foreground">DOI</span>
                   <a
-                    href="https://doi.org/10.5281/zenodo.23715023"
+                    href={`https://doi.org/${CONCEPT_DOI}`}
                     target="_blank"
                     rel="noopener noreferrer"
                     className="font-medium text-burgundy underline underline-offset-2"
                   >
-                    10.5281/zenodo.23715023
+                    {CONCEPT_DOI}
                   </a>
                 </div>
+                <p className="font-sans text-caption text-muted-foreground leading-relaxed">
+                  Built at Copenhagen Business School, Denmark, during an Otto Mønsted Visiting
+                  Professorship in 2026. The support of the Otto Mønsted Fond (grant 25-12-1849) is
+                  gratefully acknowledged.
+                </p>
+                <p className="font-sans text-caption text-muted-foreground leading-relaxed select-all">
+                  {CITE_LINE}
+                </p>
               </div>
 
               <div className="px-6 py-4 border-t border-parchment">

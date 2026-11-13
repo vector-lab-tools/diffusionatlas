@@ -300,7 +300,7 @@ The concept DOI above always resolves to the latest archived version. For a spec
 
 Concept and Design by David M. Berry, implemented with Claude Code. Design system adapted from the [CCS Workbench](https://github.com/dmberry/ccs-wb).
 
-Diffusion Atlas was created in 2026 in Copenhagen, Denmark, as part of an Otto Mønsted Visiting Professorship. We thank the Otto Mønsted Foundation for its support.
+Built at Copenhagen Business School, Denmark, during an Otto Mønsted Visiting Professorship in 2026. The support of the Otto Mønsted Fond (grant 25-12-1849) is gratefully acknowledged.
 
 ## Licence
 

@@ -4,7 +4,9 @@ title: "Diffusion Atlas: reading the generative trajectory of a denoising model"
 abstract: >-
   Diffusion Atlas reads the generative trajectory of a denoising model, the path through
   latent space that produces an image. Part of the Vector Lab family of research
-  instruments.
+  instruments. Built at Copenhagen Business School, Denmark, during an Otto Mønsted
+  Visiting Professorship in 2026. The support of the Otto Mønsted Fond (grant
+  25-12-1849) is gratefully acknowledged.
 type: software
 authors:
   - family-names: Berry
@@ -12,6 +14,11 @@ authors:
     affiliation: University of Sussex
     orcid: "https://orcid.org/0000-0002-7737-5586"
 repository-code: "https://github.com/vector-lab-tools/diffusionatlas"
+url: "https://vector-lab-tools.github.io/diffusionatlas/"
+identifiers:
+  - type: doi
+    value: 10.5281/zenodo.23715023
+    description: "Concept DOI (always resolves to the latest version)"
 license: GPL-3.0-or-later
 version: "0.4.1"
 date-released: 2026-10-29
@@ -21,3 +28,16 @@ keywords:
   - generative models
   - interpretability
   - vector space
+preferred-citation:
+  type: article
+  authors:
+    - family-names: Berry
+      given-names: David M.
+      affiliation: University of Sussex
+      orcid: "https://orcid.org/0000-0002-7737-5586"
+  title: "Vector Theory: Epistemology, Political Economy, and Probabilistic Computation"
+  journal: "Philosophy & Technology"
+  year: 2026
+  volume: 39
+  doi: 10.1007/s13347-026-01162-w
+  url: "https://doi.org/10.1007/s13347-026-01162-w"
